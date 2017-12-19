@@ -147,6 +147,22 @@ To update reactively.
   - We're doing a lot of indexing.
     - Could we index the data via Datascript and have our reactive logic be datalog?
 
+Incrementally updating pull-pattern data would make equality checks faster, as we're not
+- Creating entirely new structures for the data that's the same.
+- Making should-component-update fast again.
+
 Looking through our client/parser/read.cljc it seems like what's been described would work for us.
 - We mostly use (db/pull-x-with db query eid(s)).
 - And it's pretty cool that this could allow us to cache ids and pull separately.
+
+## Server
+What happens on the server?
+
+Reads that depend on others will be run sequentially, others in parallel.
+
+The whole engine (with reactive updates and stuff) can work on the server as well.
+- Updating certain reads when there's new transactions in the tx-queue.
+
+## Testing
+I don't see any benefits to testing. Om.next is quite good as it is.
+
