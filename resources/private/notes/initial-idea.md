@@ -1,3 +1,7 @@
+## Links:
+
+* jthomsom om.next notes: https://gist.github.com/jpthomson/6f0333defcaa9b1b29f914bb965c99ef
+
 ## Notes from a plane between Montreal and San Francisco
 
 What are the essentials?
@@ -12,6 +16,7 @@ QueryParams doesn't work.
 - We can have dynamic queries anyway, since the reads can be ultra powerful.
 
 Dynamic queries doesn't work.
+- i.e. set-query, update-query
 - Which means that we can simplify the indexing logic a lot?
 
 Don't need merge-tree, tree->db, db->tree.
@@ -24,16 +29,28 @@ Read results should be cachable, to return reads instantly.
 - Reads can be cached in om.next, but a pass of path-meta is needed, which destroys (free) pointer equality checks.
 
 Changes to data should reactively update UI
-- om.next doesn't have this, as it doesn't know the underlying database format.
-- Equality checks can be run understand if data needs updating.
+- om.next doesn't have this.
+  - It uses an indexer and queued components to trigger re-renders (I think).
+- Knowing the underlying database format (e.g. datascript) would make it easier to implement reactiveness.
+  - It's possible that we can create protocols for this stuff though.
+- Equality checks can be run understand if data needs updating and UI needs rendering.
 
-Reads should (must?) declare their query.
-- Reads without query cannot have a pattern?
-  - Making them work as they do in re-frame.
+Reads should (must?) declare their entity-query.
+- Where entity-query returns entity ids that can be pulled from.
+- Reads without an entity-query cannot have a pattern?
+  - Then we can fall back on making them work as they do in re-frame.
+  - There are cases where one doesn't want to specify queries, but we'll have to come up with examples.
 
 Can we make counts or similar queries fast?
 - Counts can be done instead of pull. That's interesting.
+  - Meaning, let's say reads declare an entity-query:
+    - The read can then decide whether to pull on those entities or do whatever they want, like a count for example.
 - Could we make it possible to depend on other read's queries?
+  - This would be nice.
+  - There's one read declared with entity-query + pull pattern. Another read depends on that reads' entity-query.
+    - Whenever the result for the entity-query changes, the reads depending on that read would also be run.
+    - Do we want to split out entity-query, post-fn (e.g pull or count) all together.
+      - Making them interceptors like in reagent?
 - Example
   - :query/notifications
   - :query/notification-count
@@ -48,12 +65,15 @@ Can we make counts or similar queries fast?
     - They can depend on 1 or many other reads for their query data.
     - They can use the post-read function (for sort and stuff) to do whatever they want.
     - This way we've specified which data they depend on.
-
+      - I think this is sick.
+      - We can here combine custom queries and entity-queries, that eventually is used in another query.
+        - entity-queries should have default optimizations, such as has anything changed. "More on this later".
 
 Seems like we want a post-query hook for reads?
 - This is possibly just an intersector
 - So that the user can sort and stuff after the query/pull is done.
   - This would be the value we cache.
+    - this is also the value used by the components, which means it's basically free to cache.
 
 Should be easier to declare whether a read should be remote or not?
 - No: (if target {:remote true} ..)
@@ -66,36 +86,43 @@ Specify reads that should be forcibly re-run?
 
 ## Parsing - Will we still have it?
 What's nice about parsing, is that it's easy to run and extend a parser.
-Defining "global rules" works pretty well UI programming
+Defining "global rules" works pretty well UI programming (like reagent/reframe does?) but it's super nice to
+just have functions instead that you can call or not. Not a fan of globally defined stuff. And whenver something
+doesn't feel just right, it's probably because it's stateful, which global things are.
 
-The parser is really the engine for reads, mutate and somewhat sends. It can change the outcome of all of them and. It's nice to have such functionality so easily extended.
+The parser is really the engine for reads, mutate and somewhat sends. It can change the outcome of all of them and.
+It's nice to have such functionality so easily extended.
 
 Parsing should dedupe query.
 
 ## Send
 Should be pluggable, but default to git-rebase.
-One shouldn't have to define an action and an inverse-action.
+One shouldn't have to define an action and an inverse-action. It's 2018.
 
 ## Merge
 
 Multimethod for merge has been great for us. 
 - Rarely used but gives a lot of power.
 
-Should possibly also always call a function whenever a key or mutate is read.
+Should possibly also always call a function whenever a key or mutate is merged.
 - To be able to do "post-merge" stuff.
 
 ## Render
 Defining UI components must be easier to do.
 Having a map with life-cycle methods is a must.
-Defining queries should be nicer.
-Also possibly defining which children one has in a vector: [Product Login]
-- Possibly associated with a key: [[:product Product] Login]
-  - If one needs multiple or something?
+- fulcro's defsc is nice.
+Defining queries could be nicer?
+- Always specifying children component joins and their query is repetative and could be nicer?
+- Also possibly defining which children one has in a vector: [Product Login]
+  - Possibly associated with a key: [[:product Product] Login]
+    - If one needs multiple or something?
 
 ## Component state
 Do we care?
 What does reagent do?
 I think they use reactive atoms, which are sharable. Pretty cool?
+What om.next does is fine too.
+- Just hooking in with react or with a protocol called ILocalState (or something).
 
 ## Response
 
@@ -105,11 +132,12 @@ Implementation could be different?
 
 Read responses as well?
 - (I.e. listen for if we've gotten a read or not).
-- Has always been an anti-pattern.
+  - Has always been an anti-pattern.
 - What do we want here?
 - I think we want: 
   - "Have we read remotely ever?"
   - "Have I been unmounted have we read since?"
+  - not sure.
 
 ## Routes
 What can we do to help with routes?
@@ -166,3 +194,61 @@ The whole engine (with reactive updates and stuff) can work on the server as wel
 ## Testing
 I don't see any benefits to testing. Om.next is quite good as it is.
 
+## Is this really just parts to om.next?
+- Indexer
+- Parser
+  - Maybe just read/mutate, since we can elide path-meta.
+- ?
+
+## Indexing with different pull-patterns?
+- For sulo, we just merge pull patterns, which would end up just being 1 index per read+pull-pattern.
+  - If someone, for some reason, wants only the data their UI component asks for, we could add a {:strict true} flag.
+    - This could strip the data from what the pull-pattern returns
+    - OR
+    - have separate indexes depending on pull pattern. This seems insane though.
+
+## Implementation
+
+### Reactive query
+
+#### New datom
+
+If new datom is in the find-pattern:
+- Doesn't matter. If it matters, it'll be in the where clause.
+  - And if it's an input, it'd have to be found by some other query and then passed to this one.
+  - Meaning we only need to index the where clauses.
+
+Find the attribute of the datom in the where clause
+- Pass the datom's eid as input to the where-clause's symbol.
+  - Place the where clause at the top to filter the query heavily by it.
+    - (which probably means we want to place where-clauses above it, in reverse)?
+- Execute the query
+  - Optimization: Implement a version of the query that's (possibly) lazy and where the analysis of
+                  the query is cached.
+                  - Lazy because we might only need the first result.
+  - If the query returns entities that we're not previously in the entity-set
+    - Add these entities, execute the pull-pattern part.
+
+### Reactive pull-pattern
+
+#### New datom
+
+For the attribute of the datom:
+- Get all pull patterns that contain the datom's attr
+  - Get the path in the pull pattern to the attr
+  - Find a match between the entities returned by the read (cached?) to the new datom.
+    - Walking with datoms, depth first, aborting when found, is probably faster than query.
+      - Odin instead of self-made transducer?
+  - Update the pull-pattern result with the new datom.
+    - Update all attributes for the datom at once.
+
+#### Datom change
+Value change or deletion.
+
+For pull-patterns that returned the datom
+- Get paths
+  - Update pull-pattern
+
+#### Recursive pattern
+
+Something to think about.
