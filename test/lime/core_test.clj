@@ -1,13 +1,8 @@
 (ns lime.core-test
-  (:require [clojure.test :refer :all]
-            [lime.core :refer :all])
-  (:import (clojure.lang DynamicClassLoader)))
+  (:require [clojure.test :refer [deftest is testing]]
+            [lime.core :refer :all]
+            [datascript.core :as ds]))
 
 (deftest a-test
   (testing "FIXME, I fail."
     (is (= 0 1))))
-
-{:query {}
- :pattern []}
-
-DynamicClassLoader

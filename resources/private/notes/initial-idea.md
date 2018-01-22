@@ -252,3 +252,91 @@ For pull-patterns that returned the datom
 #### Recursive pattern
 
 Something to think about.
+
+#### Optimizations
+
+- Given that we need to find a single match across datoms
+  - Can we sort the datom sets by count?
+    - Should be (as->> (d/datoms db :eavt) $ ;; returns an datascript.btset.Iter
+                       (- (.-right $) (.-left $)))
+      - Might not be entirely accurate as the sets may contain empty positions?
+      - Initial test with only 5 datoms show that the count is accurate with:
+        (- (.-right $) (.-left $))
+    - There's actually a function for count: datascript.btset/est-count
+    - Doesn't actually need to be fully sorted, can just bubble up the smallest Iter
+      - Like clojure.set/union and intersection.
+
+#### Restrictions
+
+Only support find patterns [?e .] and [[?e ...]]
+- At first at least.
+- This makes sense because a pull pattern is executed on an eid or eids.
+  - tuples can be achieved by having dependent queries
+  - and for entirely custom queries
+    - wait. How do we make these queries reactive? I forget.
+      - What if they specify a function that:
+        - given the environment (app-state, last return and stuff)
+        - check if you should be re-rendered.
+
+Don't support query rules for now?
+- They are recursive and it can get messy?
+  - Just avoid for the 0.1.0 release.
+
+#### It's just a parser
+
+Reads should always return what has been read.
+- when reads return exactly the same thing, the UI component won't be updated.
+- the whole query should really be able to be run every re-render.
+- it's not so much a reactive UI, it's just a fast full-re-render?
+  - the props should just be taken from the path of the UI component in the query
+- each reconciliation should provide the tx-queue (changes since last time)
+  - and db when the last read was done.
+    - what about params?
+      - just store all db values for all param values?
+It's about indexing reads
+- their where clauses and pull patterns.
+- it's about having reads depend on each other.
+  - which is an implementation detail.
+- it's about incrementally updating pull and query results.
+- this is it?
+  - it's portable.
+  - any om.next user can use it.
+- equality checks might be useful
+  - can't think of a usecase though.
+
+UI components doesn't need paths. The parser will be deduped with merged pull pattern.
+- The components can just get the result from the root of the parsed map.
+
+Params will be the same for all components as it's the route that decides them.
+
+This is how we get rid of path-meta. UI->props will have a flat map (or datascript db with the indexed&cached reads).
+
+Will have to make parser lazy for the union queries, to avoid re-parsing the query all the time.
+- the query will be static? Never change?
+
+Think about git-rebase. As one is jumping to a different db most of the db should be equal.
+- Fast equality checks might help here.
+- Will need to get the tx-report queue here as well.
+- incremental updates break.
+
+#### Implicit read dependency problem
+
+When writing reads, they sometimes implicity depended on other reads
+and one just hoped that we'd have that data on the front end.
+
+What this really meant was there is a where clause that depend on some
+data, this is explicit in code but the om.next parser doesn't handle this.
+
+What we can do is - in our reads - declare query dependencies and get the
+pull pattern from the where clauses of that query.
+- First solution could specify the query pattern (of the query dependecy reads)
+  manually instead of getting it from the where clause.
+
+#### Patterns aren't supplied in the reads
+
+We'll have to dynamically index pull patterns as they're not specified in the reads.
+- We could move this specification to the reads, but I don't think that's as nice.
+- I think as a component developer, you want to be able to specify what you need.
+  - It also makes it easy to see what one can expect in the props.
+
+Hopefully this doesn't become too much of a problem.
