@@ -42,8 +42,7 @@
 (def schema {:query/id            {:db/unique :db.unique/value}
              :query/where-clauses {:db/valueType   :db.type/ref
                                    :db/cardinality :db.cardinality/many}
-             :query/find-pattern  {:db/valueType   :db.type/ref
-                                   :db/cardinality :db.cardinality/many}
+             :query/find-pattern  {:db/valueType   :db.type/ref}
              :where.clause/parts  {:db/valueType   :db.type/ref
                                    :db/cardinality :db.cardinality/many}
              :where.clause/type   {:db/index true}
@@ -73,37 +72,27 @@
                                    m))))
                cat))))
 
-(s/conform :query/find-pattern '[[?e ?d]])
+(s/conform :query/find-pattern '[ ?e ?d])
 
 
 (defn- index-find-pattern [find-pattern]
   (let [[find-type conformed] (s/conform :query/find-pattern find-pattern)]
     (condp = find-type
       :scalar
-      [{:find.pattern/index  0
-        :find.pattern/symbol (:symbol conformed)
-        :find.pattern/type   find-type}]
+      {:find.pattern/symbols [(:symbol conformed)]
+       :find.pattern/type    find-type}
 
       :relation
-      (into []
-            (map-indexed (fn [idx symbol]
-                           {:find.pattern/type   find-type
-                            :find.pattern/symbol symbol
-                            :find.pattern/index  idx}))
-            conformed)
+      {:find.pattern/type   find-type
+       :find.pattern/symbols conformed}
 
       :tuple
-      (into []
-            (map-indexed (fn [idx symbol]
-                           {:find.pattern/type   find-type
-                            :find.pattern/symbol symbol
-                            :find.pattern/index  idx}))
-            (first conformed))
+      {:find.pattern/type   find-type
+       :find.pattern/symbols (first conformed)}
 
       :collection
-      [{:find.pattern/index  0
-        :find.pattern/symbol (-> conformed first :symbol)
-        :find.pattern/type   find-type}])))
+      {:find.pattern/symbols [(-> conformed first :symbol)]
+       :find.pattern/type    find-type})))
 
 (defn index-query
   [id query]
@@ -129,9 +118,8 @@
                                   [?bar :bar/xyz _]
                                   [?bar :bar/missing]]}
    ;; We may want to index/parse :query/find more than just getting the raw pattern.
-   :query/find-pattern  [{:find.pattern/type   :scalar
-                          :find.pattern/symbol '?e
-                          :find.pattern/index  0}]
+   :query/find-pattern  {:find.pattern/type    :scalar
+                         :find.pattern/symbols ['?e]}
    :query/where-clauses '[#:where.clause{:index 0 :eav :e, :type :logic-var, :value ?e}
                           #:where.clause{:index 0 :eav :a, :type :known, :value :foo/bar}
                           #:where.clause{:index 0 :eav :v, :type :logic-var, :value ?bar}
@@ -147,27 +135,17 @@
 
 (deftest query-indexing-test
   (is (= (index-find-pattern '[?e .])
-         [{:find.pattern/index  0
-           :find.pattern/symbol '?e
-           :find.pattern/type   :scalar}]))
+         {:find.pattern/symbols '[?e]
+          :find.pattern/type    :scalar}))
   (is (= (index-find-pattern '[?e ?b])
-         [{:find.pattern/index 0
-           :find.pattern/symbol '?e
-           :find.pattern/type :relation}
-          {:find.pattern/index 1
-           :find.pattern/symbol '?b
-           :find.pattern/type :relation}]))
+         {:find.pattern/symbols '[?e ?b]
+          :find.pattern/type    :relation}))
   (is (= (index-find-pattern '[[?e ?b]])
-         [{:find.pattern/index 0
-           :find.pattern/symbol '?e
-           :find.pattern/type :tuple}
-          {:find.pattern/index 1
-           :find.pattern/symbol '?b
-           :find.pattern/type :tuple}]))
+         {:find.pattern/symbols '[?e ?b]
+             :find.pattern/type    :tuple}))
   (is (= (index-find-pattern '[[?e ...]])
-         [{:find.pattern/index 0
-           :find.pattern/symbol '?e
-           :find.pattern/type :collection}]))
+         {:find.pattern/symbols ['?e]
+             :find.pattern/type    :collection}))
   (is (= (index-query ::test-id query) expected-indexed-query))
 
   (let [conn (d/create-conn schema)]
@@ -176,8 +154,7 @@
                    [:query/id
                     :query/map
                     {:query/find-pattern [:find.pattern/type
-                                          :find.pattern/symbol
-                                          :find.pattern/index]}
+                                          :find.pattern/symbols]}
                     {:query/where-clauses [:where.clause/index
                                            :where.clause/value
                                            :where.clause/type
@@ -197,7 +174,7 @@
 ;; Interesting stuff.
 
 (defn query-xf [query-db query-id]
-  (let []
+  (fn [db]
     (map identity)))
 
 (deftest indexed-query-querying-test
@@ -221,5 +198,67 @@
     (d/transact! query-conn (map-indexed index-query queries))
 
     #_(is (= (d/entid (d/db data-conn) [:user/name "Petter"])
-           (first (sequence (query-xf (d/db query-conn) 0)
-                            (d/db data-conn)))))))
+           ((query-xf (d/db query-conn) 0)
+                     (d/db data-conn))))))
+
+(comment
+  (let [data-conn   (d/create-conn {:user/name      {:db/unique :db.unique/identity}
+                                    :user/posts     {:db/valueType   :db.type/ref
+                                                     :db/cardinality :db.cardinality/many}
+                                    :post/comments  {:db/valueType   :db.type/ref
+                                                     :db/cardinality :db.cardinality/many}
+                                    :comment/author {:db/valueType :db.type/ref}})
+        query-conn (d/create-conn schema)
+        queries [{:find  '[[?e ...]]
+                  :where '[[?e :user/posts ?post]
+                           [?post :post/title "Post 1"]]}]]
+    (d/transact! data-conn [{:user/name "Other"}
+                            {:user/name  "Petter"
+                             :user/posts [{:post/title    "Post 1"
+                                           :post/comments [{:comment/content "Bla bla"
+                                                            :comment/author  [:user/name "Other"]}
+                                                           {:comment/content "Blu blu"
+                                                            :comment/author  [:user/name "Petter"]}]}]}])
+    (d/transact! query-conn (map-indexed index-query queries))
+
+    (is (= (d/entid (d/db data-conn) [:user/name "Petter"])
+           (first ((query-xf (d/db query-conn) 0) (d/db data-conn)))))
+    [data-conn query-conn queries])
+
+  (def setup *1)
+  (def data-conn (first setup))
+  (def query-conn (second setup))
+  (def queries (nth setup 2))
+
+  (d/q {:find  '[[?out-symbols ?find-type]]
+        :where '[[?query :query/id ?query-id]
+                 [?query :query/find-pattern ?find]
+                 [?find :find.pattern/type ?find-type]
+                 [?find :find.pattern/symbols ?out-symbols]]
+        :in    '[$ ?query-id]}
+       (d/db query-conn)
+       0)
+  (def out-symbols (first *1))
+  (def find-type (second *2))
+
+  (d/q {:in    '[$ ?query-id [?out-symbol ...]]
+        :where '[[?query :query/id ?query-id]
+                 [?query :query/where-clauses ?where]
+                 ;; Would be nice to have an indexed where.clause/symbol here.
+                 ;; Instead of first filtering by :logic-var then getting the value.
+                 [?where :where.clause/type :logic-var]
+                 [?where :where.clause/value ?out-symbol]
+                 [?where :where.clause/eav ?eav]]
+        :find '[?out-symbol ?eav]})
+
+  ;; TODO: more.
+  ;; Thought process:
+  ;; Given a query-id and an [?out-symbol ...]
+  ;; - Output filters and additional paths to new out-symbols (paths via references).
+  ;;   - Filters when the :where.clause/type is :known
+  ;;   - Output new symbols to follow when the other (:e or :v) is :logic-var.
+  ;; Then we'll create a transducer given the output of this ^^^^ function.
+
+  ;; To be continued...
+
+  )
