@@ -1,6 +1,8 @@
 (ns lime.core-test
   (:require [clojure.test :refer [deftest is testing]]
             [clojure.spec.alpha :as s]
+            [clojure.spec.gen.alpha :as gen]
+            [clojure.spec.test.alpha :as st]
             [lime.core :refer :all]
             [datascript.core :as d]
             [datascript.db]
@@ -11,20 +13,27 @@
        (nil? (namespace sym))
        (str/starts-with? (name sym) "?")))
 
-(s/def :where.clause/logic-var logic-var?)
+(s/def :where.clause/logic-var (s/with-gen logic-var?
+                                           #(gen/fmap (fn [sym]
+                                                        (symbol (str "?" (name sym))))
+                                                      (s/gen symbol?))))
 (s/def :where.clause/ignore #{'_})
 (s/def :where.clause/e (s/or :logic-var :where.clause/logic-var
                              :ignore :where.clause/ignore
-                             :known number?))
+                             :known nat-int?))
 (s/def :where.clause/a (s/or :known keyword?))
 (s/def :where.clause/v (s/or
                          :logic-var :where.clause/logic-var
                          :ignore :where.clause/ignore
                          :known some?))
 
-(s/def :query/where-clause (s/cat :where.clause/e :where.clause/e
-                                  :where.clause/a (s/? :where.clause/a)
-                                  :where.clause/v (s/? :where.clause/v)))
+(s/def :query/where-clause (s/& (s/cat :where.clause/e :where.clause/e
+                                       :where.clause/a (s/? :where.clause/a)
+                                       :where.clause/v (s/? :where.clause/v))
+                                #(let [c (count %)]
+                                   (if-some [v (:where.clause/v %)]
+                                     (contains? % :where.clause/a)
+                                     true))))
 (s/def :query/where-clauses (s/coll-of :query/where-clause))
 
 (s/def :query/find-pattern (s/or :relation (s/+ :where.clause/logic-var)
@@ -38,7 +47,6 @@
 (s/def :query/find :query/find-pattern)
 
 (s/def ::query (s/keys :req-un [:query/find :query/where]))
-
 
 (def schema {:query/id            {:db/unique :db.unique/value}
              :query/where-clauses {:db/valueType   :db.type/ref
@@ -55,6 +63,7 @@
              :find.pattern/symbol {:db/index true}
              :find.pattern/index  {:db/index true}
              })
+
 
 (defn- index-where-clauses [where-clauses]
   (->> (s/conform :query/where-clauses where-clauses)
@@ -79,25 +88,14 @@
 
 (s/conform :query/find-pattern '[ ?e ?d])
 
-
 (defn- index-find-pattern [find-pattern]
   (let [[find-type conformed] (s/conform :query/find-pattern find-pattern)]
-    (condp = find-type
-      :scalar
-      {:find.pattern/symbols [(:symbol conformed)]
-       :find.pattern/type    find-type}
-
-      :relation
-      {:find.pattern/type   find-type
-       :find.pattern/symbols conformed}
-
-      :tuple
-      {:find.pattern/type   find-type
-       :find.pattern/symbols (first conformed)}
-
-      :collection
-      {:find.pattern/symbols [(-> conformed first :symbol)]
-       :find.pattern/type    find-type})))
+    {:find.pattern/type    find-type
+     :find.pattern/symbols (condp = find-type
+                             :scalar [(:symbol conformed)]
+                             :relation conformed
+                             :tuple (first conformed)
+                             :collection [(-> conformed first :symbol)])}))
 
 (defn index-query
   [id query]
@@ -155,7 +153,7 @@
              :find.pattern/type    :tuple}))
   (is (= (index-find-pattern '[[?e ...]])
          {:find.pattern/symbols ['?e]
-             :find.pattern/type    :collection}))
+          :find.pattern/type    :collection}))
   (is (= (index-query ::test-id query) expected-indexed-query))
 
   (let [conn (d/create-conn schema)]
@@ -490,3 +488,4 @@
 ;; 4. Execute a re-ordered query based on changed datoms.
 ;; 5. Have multiple parts of a query changed (multiple attributes), re-order?, execute query.
 ;; 6... then we've come pretty far.
+
