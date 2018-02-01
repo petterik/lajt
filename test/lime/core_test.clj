@@ -562,41 +562,97 @@
 ;; Eventually generate mutations to perform arbitrary changes.
 ;; Good strategy?
 
-(defn read-key [env k]
-  {:query {:find '[?person .]
-           :where '[[?person :person/first-name ?fname]]}
-   :pull [:person/first-name]})
+(def reads
+  {:person/by-name
+   {:query {:find  '[?person .]
+            :where '[[?person :person/first-name ?fname]]}
+    ;; Remember: Pull is dynamic and should be passed in, not specified.
+    :pull  [:person/first-name]}
+   :person/by-last-name
+   {:query {:find  '[?person .]
+            :where '[[?person :person/last-name ?lname]]}
+    ;; Remember: Pull is dynamic and should be passed in, not specified.
+    :pull  [:person/last-name]}})
 
-(def test-schema {})
+(defn parse [q read-fn]
+  (into {}
+        (map (juxt identity (comp read-fn #(-> (get reads %)
+                                               (assoc :query/id %)))))
+        q))
 
-(defn init-env [])
-
-(defn incremental-pull-query [env query-db data-db])
+(def test-schema {:person/first-name {:db/unique :db.unique/identity}})
 
 (defn ->tx-data-listener []
   (let [tx-data-atom (atom [])]
     (fn
       ([]
-        (let [tx-data @tx-data-atom]
-          (reset! tx-data-atom [])
-          tx-data))
+       (let [tx-data @tx-data-atom]
+         (reset! tx-data-atom [])
+         tx-data))
       ([tx-report]
-        (swap! tx-data-atom into (:tx-data tx-report))))))
+       (swap! tx-data-atom into (:tx-data tx-report))))))
+
+(defn init-env []
+  (let [conn (d/create-conn schema)]
+    (d/transact! conn (map (fn [[read-key read-map]]
+                             (index-query read-key (:query read-map)))
+                           reads))
+    {:query-conn conn
+     :query-db   (d/db conn)
+     :tx-data-listener (->tx-data-listener)}))
+
+(defn incremental-pull-query [{:keys [query-db db tx-data]} reads parse-q]
+  (let [reads-to-execute (d/q {:in    '[$ [[_ ?tx-attr] ...]]
+                               :where '[[?where :where.clause/value ?tx-attr]
+                                        [?where :where.clause/eav :a]
+                                        [?query :query/where-clauses ?where]
+                                        [?query :query/id ?query-id]]
+                               :find  '[[?query-id ...]]}
+                              query-db
+                              tx-data)]
+    (doto (into {}
+           (map (juxt identity
+                      ;; How do we know if it should be pull or pull-many?
+                      #(d/pull db
+                               (get-in reads [% :pull])
+                               (d/q (extract-query query-db %)
+                                    db))))
+           reads-to-execute)
+      prn)))
 
 (deftest query-pull-test
-  (let [query-conn (d/create-conn schema)
-        data-conn (d/create-conn test-schema)
-        tx-data-listener (->tx-data-listener)
+  (let [data-conn (d/create-conn test-schema)
         env (init-env)]
-    (d/listen! data-conn tx-data-listener)
+    (d/listen! data-conn (:tx-data-listener env))
     (d/transact! data-conn [{:person/first-name "Petter"}])
-    (let [{:keys [query pull]} (read-key env nil)
+    (let [parse-q [:person/by-name]
           db (d/db data-conn)]
-      (is (= (d/pull db pull (d/q query db))
-             (incremental-pull-query env
-                                     ;; Probably put the query-conn in env.
-                                     (d/db query-conn)
-                                     db))))))
+      (is (= (parse parse-q
+                    (fn [{:keys [query pull]}]
+                      (d/pull db pull (d/q query db))))
+             (incremental-pull-query
+               (assoc env :db db
+                          :tx-data ((:tx-data-listener env))
+                          :tx-data-listener nil)
+               reads
+               parse-q))))
+
+    (d/transact! data-conn [{:person/first-name "Petter"
+                             :person/last-name "Eriksson"}])
+    (let [parse-q [:person/by-name
+                   :person/by-last-name]
+          db (d/db data-conn)]
+      (is (= (parse parse-q
+                    (fn [{:keys [query pull]}]
+                      (d/pull db pull (d/q query db))))
+             ;; TODO: Incremental queries returns only queries that has changed.
+             ;; Need to include what hasn't changed.
+             (incremental-pull-query
+               (assoc env :db db
+                          :tx-data ((:tx-data-listener env))
+                          :tx-data-listener nil)
+               reads
+               parse-q))))))
 
 ;; Then what?
 ;; Think about re-ordering the query?
