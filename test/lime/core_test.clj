@@ -3,6 +3,8 @@
             [clojure.spec.alpha :as s]
             [clojure.spec.gen.alpha :as gen]
             [clojure.spec.test.alpha :as st]
+            [clojure.test.check.properties :as prop]
+            [clojure.test.check.clojure-test :refer [defspec]]
             [lime.core :refer :all]
             [datascript.core :as d]
             [datascript.db]
@@ -37,18 +39,20 @@
 (s/def :query/where-clauses (s/coll-of :query/where-clause))
 
 (s/def :query/find-pattern (s/or :relation (s/+ :where.clause/logic-var)
-                                 :tuple (s/coll-of (s/+ :where.clause/logic-var))
+                                 :tuple (s/coll-of (s/+ :where.clause/logic-var)
+                                                   :count 1
+                                                   :into [])
                                  :scalar (s/cat :symbol :where.clause/logic-var
                                                 :dot '#{.})
-                                 :collection (s/coll-of (s/cat :symbol :where.clause/logic-var
-                                                               :dots '#{...}))))
+                                 :collection (s/tuple (s/cat :symbol :where.clause/logic-var
+                                                             :dots '#{...}))))
 
 (s/def :query/where :query/where-clauses)
 (s/def :query/find :query/find-pattern)
 
 (s/def ::query (s/keys :req-un [:query/find :query/where]))
 
-(def schema {:query/id            {:db/unique :db.unique/value}
+(def schema {:query/id            {:db/unique      :db.unique/value}
              :query/where-clauses {:db/valueType   :db.type/ref
                                    :db/cardinality :db.cardinality/many}
              :query/find-pattern  {:db/valueType   :db.type/ref}
@@ -60,8 +64,6 @@
              :where.clause/eav    {:db/index true}
              :where.clause/idx    {:db/index true}
              :find.pattern/type   {:db/index true}
-             :find.pattern/symbol {:db/index true}
-             :find.pattern/index  {:db/index true}
              })
 
 
@@ -86,7 +88,7 @@
                                    m))))
                    cat))))
 
-(s/conform :query/find-pattern '[ ?e ?d])
+(s/conform :query/find-pattern '[?e ?d])
 
 (defn- index-find-pattern [find-pattern]
   (let [[find-type conformed] (s/conform :query/find-pattern find-pattern)]
@@ -96,6 +98,9 @@
                              :relation conformed
                              :tuple (first conformed)
                              :collection [(-> conformed first :symbol)])}))
+
+(s/conform :query/find-pattern '[?A .])
+(index-find-pattern '[?A .])
 
 (defn index-query
   [id query]
@@ -484,8 +489,115 @@
 ;; 2. We can extract the query again (sort of).
 ;;
 ;; Next steps:
-;; 3. Execute an indexed query
+;; 3. Execute an indexed query (done~)
 ;; 4. Execute a re-ordered query based on changed datoms.
 ;; 5. Have multiple parts of a query changed (multiple attributes), re-order?, execute query.
 ;; 6... then we've come pretty far.
+
+(defn extract-where-clauses [query-db query-id]
+  ;; Only extracts the queries with :e :a and :v.
+  ;; Why are we doing this?
+  ;; It's cool and stuff, but will it be needed when we need to re-order the claues?
+  ;; dunno.
+  ;; Kinda fun though?
+  (-> (d/q {:where '[[?query :query/id ?query-id]
+                     [?query :query/map ?map]]
+             :find  '[?map .]
+             :in    '[$ ?query-id]}
+           query-db
+           query-id)
+      :where))
+
+(defn extract-find-pattern [query-db query-id]
+  (let [query  (d/entity query-db [:query/id query-id])
+        {:find.pattern/keys [type symbols]} (:query/find-pattern query)]
+    (condp = type
+      :scalar (vec (cons (first symbols) ['.]))
+      :relation symbols
+      :tuple [symbols]
+      :collection [[(first symbols) '...]])))
+
+(defn extract-query [query-db query-id]
+  {:where (extract-where-clauses query-db query-id)
+   :find  (extract-find-pattern query-db query-id)})
+
+(defn- query-roundtrip-test* [query]
+  {:pre [(map? query)]}
+  (let [query-conn (d/create-conn schema)
+        query-id 0]
+    (d/transact! query-conn [(index-query query-id query)])
+    (is (= (extract-query (d/db query-conn) query-id)
+           query))))
+
+(defspec query-roundtrip-spec
+  10
+  (prop/for-all [query (s/gen ::query)]
+    (query-roundtrip-test* query)))
+
+(deftest query-roundtrip-test
+  (query-roundtrip-test* '{:find [(?A)], :where []}))
+
+;; Thoughts on query engine
+;; - Would have to do a recursive algorithm that binds logic-vars as it
+;;   traverses the query.
+;; - Need to figure out the right way to traverse multiple paths from a
+;;   single logic-var.
+;; - Need to be able to bind logic-vars between paths
+;; - Need to be able to walk backwards
+
+;; Now. Since query engine won't be done until later, we'll start doing
+;; changed datom stuff.
+;; Given some changed datoms:
+;; Find queries that care
+;; Bind logic-vars that matter
+;; - Think about the :in part of the query.
+;; Execute the query
+
+;; <HERE>
+
+;; Tests:
+;; specify a query + pull-pattern
+;; (pull (query)) should be equal to (incremental-pull (incremental-query))
+;; Specify mutations to change the database
+;; Eventually generate mutations to perform arbitrary changes.
+;; Good strategy?
+
+(defn read-key [env k]
+  {:query {:find '[?person .]
+           :where '[[?person :person/first-name ?fname]]}
+   :pull [:person/first-name]})
+
+(def test-schema {})
+
+(defn init-env [])
+
+(defn incremental-pull-query [env query-db data-db])
+
+(defn ->tx-data-listener []
+  (let [tx-data-atom (atom [])]
+    (fn
+      ([]
+        (let [tx-data @tx-data-atom]
+          (reset! tx-data-atom [])
+          tx-data))
+      ([tx-report]
+        (swap! tx-data-atom into (:tx-data tx-report))))))
+
+(deftest query-pull-test
+  (let [query-conn (d/create-conn schema)
+        data-conn (d/create-conn test-schema)
+        tx-data-listener (->tx-data-listener)
+        env (init-env)]
+    (d/listen! data-conn tx-data-listener)
+    (d/transact! data-conn [{:person/first-name "Petter"}])
+    (let [{:keys [query pull]} (read-key env nil)
+          db (d/db data-conn)]
+      (is (= (d/pull db pull (d/q query db))
+             (incremental-pull-query env
+                                     ;; Probably put the query-conn in env.
+                                     (d/db query-conn)
+                                     db))))))
+
+;; Then what?
+;; Think about re-ordering the query?
 
