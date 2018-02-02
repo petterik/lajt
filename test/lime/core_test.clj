@@ -39,9 +39,7 @@
 (s/def :query/where-clauses (s/coll-of :query/where-clause))
 
 (s/def :query/find-pattern (s/or :relation (s/+ :where.clause/logic-var)
-                                 :tuple (s/coll-of (s/+ :where.clause/logic-var)
-                                                   :count 1
-                                                   :into [])
+                                 :tuple (s/tuple (s/+ :where.clause/logic-var))
                                  :scalar (s/cat :symbol :where.clause/logic-var
                                                 :dot '#{.})
                                  :collection (s/tuple (s/cat :symbol :where.clause/logic-var
@@ -91,13 +89,15 @@
 (s/conform :query/find-pattern '[?e ?d])
 
 (defn- index-find-pattern [find-pattern]
-  (let [[find-type conformed] (s/conform :query/find-pattern find-pattern)]
-    {:find.pattern/type    find-type
-     :find.pattern/symbols (condp = find-type
-                             :scalar [(:symbol conformed)]
-                             :relation conformed
-                             :tuple (first conformed)
-                             :collection [(-> conformed first :symbol)])}))
+  (if-not (s/valid? :query/find-pattern find-pattern)
+    (throw (ex-info "Spec error" (s/explain :query/find-pattern find-pattern)))
+    (let [[find-type conformed] (s/conform :query/find-pattern find-pattern)]
+      {:find.pattern/type    find-type
+       :find.pattern/symbols (condp = find-type
+                               :scalar [(:symbol conformed)]
+                               :relation conformed
+                               :tuple (first conformed)
+                               :collection [(-> conformed first :symbol)])})))
 
 (s/conform :query/find-pattern '[?A .])
 (index-find-pattern '[?A .])
@@ -572,7 +572,11 @@
    {:query {:find  '[?person .]
             :where '[[?person :person/last-name ?lname]]}
     ;; Remember: Pull is dynamic and should be passed in, not specified.
-    :pull  [:person/last-name]}})
+    :pull  [:person/last-name]}
+   :people/by-name
+   {:query {:find  '[[?person ...]]
+            :where '[[?person :person/first-name ?fname]]}
+    :pull  [:person/first-name]}})
 
 (defn parse [q read-fn]
   (into {}
@@ -597,62 +601,93 @@
     (d/transact! conn (map (fn [[read-key read-map]]
                              (index-query read-key (:query read-map)))
                            reads))
-    {:query-conn conn
-     :query-db   (d/db conn)
-     :tx-data-listener (->tx-data-listener)}))
+    {:query-conn       conn
+     :query-db         (d/db conn)
+     :tx-data-listener (->tx-data-listener)
+     :cache            (atom {})}))
 
-(defn incremental-pull-query [{:keys [query-db db tx-data]} reads parse-q]
-  (let [reads-to-execute (d/q {:in    '[$ [[_ ?tx-attr] ...]]
+(defn incremental-pull-query [{:keys [query-db db tx-data cache]} reads parse-q]
+  (let [reads-to-execute (d/q {:in    '[$ [[_ ?tx-attr] ...] [?query-id ...]]
                                :where '[[?where :where.clause/value ?tx-attr]
                                         [?where :where.clause/eav :a]
                                         [?query :query/where-clauses ?where]
                                         [?query :query/id ?query-id]]
                                :find  '[[?query-id ...]]}
                               query-db
-                              tx-data)]
-    (doto (into {}
-           (map (juxt identity
-                      ;; How do we know if it should be pull or pull-many?
-                      #(d/pull db
-                               (get-in reads [% :pull])
-                               (d/q (extract-query query-db %)
-                                    db))))
-           reads-to-execute)
-      prn)))
+                              tx-data
+                              parse-q)]
+    (-> (swap! cache
+            into
+            (map (juxt identity
+                       ;; How do we know if it should be pull or pull-many?
+                       ;; TODO: Get information about the find-pattern from the query
+                       #(let [res (d/q (extract-query query-db %)
+                                       db)]
+                          ((if (number? res) d/pull d/pull-many)
+                            db
+                            ;; This should be passed in.
+                            (get-in reads [% :pull])
+                            res))))
+            reads-to-execute)
+        (select-keys parse-q))))
 
 (deftest query-pull-test
   (let [data-conn (d/create-conn test-schema)
         env (init-env)]
     (d/listen! data-conn (:tx-data-listener env))
-    (d/transact! data-conn [{:person/first-name "Petter"}])
-    (let [parse-q [:person/by-name]
-          db (d/db data-conn)]
-      (is (= (parse parse-q
-                    (fn [{:keys [query pull]}]
-                      (d/pull db pull (d/q query db))))
-             (incremental-pull-query
-               (assoc env :db db
-                          :tx-data ((:tx-data-listener env))
-                          :tx-data-listener nil)
-               reads
-               parse-q))))
+    (testing "Cardinality one"
+      (d/transact! data-conn [{:person/first-name "Petter"}])
+      (let [parse-q [:person/by-name]
+            db (d/db data-conn)]
+        (is (= (parse parse-q
+                      (fn [{:keys [query pull]}]
+                        (d/pull db pull (d/q query db))))
+               (incremental-pull-query
+                 (assoc env :db db
+                            :tx-data ((:tx-data-listener env))
+                            :tx-data-listener nil)
+                 reads
+                 parse-q))))
 
-    (d/transact! data-conn [{:person/first-name "Petter"
-                             :person/last-name "Eriksson"}])
-    (let [parse-q [:person/by-name
-                   :person/by-last-name]
-          db (d/db data-conn)]
-      (is (= (parse parse-q
-                    (fn [{:keys [query pull]}]
-                      (d/pull db pull (d/q query db))))
-             ;; TODO: Incremental queries returns only queries that has changed.
-             ;; Need to include what hasn't changed.
-             (incremental-pull-query
-               (assoc env :db db
-                          :tx-data ((:tx-data-listener env))
-                          :tx-data-listener nil)
-               reads
-               parse-q))))))
+      (testing "Adding data to an existing entity"
+        (d/transact! data-conn [{:person/first-name "Petter"
+                                 :person/last-name  "Eriksson"}])
+        (let [parse-q [:person/by-name
+                       :person/by-last-name]
+              db (d/db data-conn)]
+          (is (= (parse parse-q
+                        (fn [{:keys [query pull]}]
+                          (d/pull db pull (d/q query db))))
+                 ;; TODO: Incremental queries returns only queries that has changed.
+                 ;; Need to include what hasn't changed.
+                 (incremental-pull-query
+                   (assoc env :db db
+                              :tx-data ((:tx-data-listener env))
+                              :tx-data-listener nil)
+                   reads
+                   parse-q))))))
+
+    ;; Clean up the tests also.
+    (testing "cardinality many"
+      (d/transact! data-conn [{:person/first-name "Diana"
+                               :person/last-name  "Gren"}])
+      (let [parse-q [:people/by-name]
+            db (d/db data-conn)]
+        (is (= (parse parse-q
+                      (fn [{:keys [query pull]}]
+                        (d/pull-many db pull (d/q query db))))
+               ;; TODO: Incremental queries returns only queries that has changed.
+               ;; Need to include what hasn't changed.
+               (incremental-pull-query
+                 (assoc env :db db
+                            :tx-data ((:tx-data-listener env))
+                            :tx-data-listener nil)
+                 reads
+                 parse-q)))))
+
+    (testing "parameters (route-params for example)"
+      ;; TODO.
+      (is (true? false)))))
 
 ;; Then what?
 ;; Think about re-ordering the query?
