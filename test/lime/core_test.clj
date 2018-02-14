@@ -692,3 +692,40 @@
 ;; Then what?
 ;; Think about re-ordering the query?
 
+(comment
+  Queries can be done on a filtered database.
+  - wait, no?
+    - because what if there's an attribute that appears in two where clauses.
+    - one pass it wants a filter, the other one it doesn't.
+      - this is a problem anyway, which will lead to having to run two queries.
+    - but we could do this for queries that doesn't have an attribute that appears twice.
+    - could also fallback on re-running the query when it appears more than once.
+
+  Moving where clauses around might still be a good idea
+  - property based tests can provide good benchmarks.
+    - just save the data that were generated.
+
+  The parameters I'm thinking is our :symbols map.
+  - values may need to be functions taking additional values when they are destructing values in a weird way.
+  - scalar values can be turned in to vectors
+  - sequences can be concatenated.
+  - maps will need a function.
+    - For destructoring
+  - this would probably do it though.
+
+  But yeah, if the attribute appears more than once, it'll need multiple queries to be run.
+  - feature toggle for this to fall back to just rerunning the query.
+  - putting tx-data values in the params map is orthogonal to re-arranging the where clauses.
+
+  Writing a generator for all possible pull patterns is interesting:
+  - define the whole pull pattern
+    - then take a random chunk of it.)
+
+;; What small thing can I do to progress?
+;; Defining a read with parameters as :symbols
+;; Testing scalar values, sequences and maps
+;; Testing case where attribute appears more than once
+;; - Will need an additional test for when find pattern is a scalar.
+;;   - Does order of which query to run matter?
+
+
