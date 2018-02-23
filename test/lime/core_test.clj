@@ -6,6 +6,7 @@
             [clojure.test.check.properties :as prop]
             [clojure.test.check.clojure-test :refer [defspec]]
             [lime.core :refer :all]
+            [lime.parser :as parser]
             [datascript.core :as d]
             [datascript.db]
             [clojure.string :as str]))
@@ -576,13 +577,27 @@
    :people/by-name
    {:query {:find  '[[?person ...]]
             :where '[[?person :person/first-name ?fname]]}
-    :pull  [:person/first-name]}})
+    :pull  [:person/first-name]}
 
-(defn parse [q read-fn]
-  (into {}
-        (map (juxt identity (comp read-fn #(-> (get reads %)
-                                               (assoc :query/id %)))))
-        q))
+   :people/by-param
+   {:query     {:find  '[[?person ...]]
+                :where '[[?person :person/first-name ?fname]]}
+    :pull      [:person/first-name]
+    :params-fn (fn [{:keys [first-name]}]
+                 {'?fname first-name})}})
+
+
+(defn parse [db query]
+  ((parser/parser {:read
+                   (fn [{:keys [db]} k p]
+                     (let [{:keys [query pull params-fn]} (get reads k)
+                           query-input (when (some? params-fn) (params-fn p))
+                           query (assoc query :in (into ['$] (map key) (seq query-input)))
+                           res (apply d/q query db (map val (seq query-input)))]
+                       ((if (number? res) d/pull d/pull-many)
+                         db pull res)))})
+    {:db db}
+    query))
 
 (def test-schema {:person/first-name {:db/unique :db.unique/identity}})
 
@@ -594,16 +609,19 @@
          (reset! tx-data-atom [])
          tx-data))
       ([tx-report]
+        ;; (prn (:max-tx (:db-after tx-report)))
        (swap! tx-data-atom into (:tx-data tx-report))))))
 
-(defn init-env []
-  (let [conn (d/create-conn schema)]
+(defn init-env [data-conn]
+  (let [conn (d/create-conn schema)
+        listener (->tx-data-listener)]
     (d/transact! conn (map (fn [[read-key read-map]]
                              (index-query read-key (:query read-map)))
                            reads))
+    (d/listen! data-conn listener)
     {:query-conn       conn
      :query-db         (d/db conn)
-     :tx-data-listener (->tx-data-listener)
+     :tx-data-listener listener
      :cache            (atom {})}))
 
 (defn incremental-pull-query [{:keys [query-db db tx-data cache]} reads parse-q]
@@ -633,15 +651,12 @@
 
 (deftest query-pull-test
   (let [data-conn (d/create-conn test-schema)
-        env (init-env)]
-    (d/listen! data-conn (:tx-data-listener env))
+        env (init-env data-conn)]
     (testing "Cardinality one"
       (d/transact! data-conn [{:person/first-name "Petter"}])
       (let [parse-q [:person/by-name]
             db (d/db data-conn)]
-        (is (= (parse parse-q
-                      (fn [{:keys [query pull]}]
-                        (d/pull db pull (d/q query db))))
+        (is (= (parse db parse-q)
                (incremental-pull-query
                  (assoc env :db db
                             :tx-data ((:tx-data-listener env))
@@ -655,11 +670,7 @@
         (let [parse-q [:person/by-name
                        :person/by-last-name]
               db (d/db data-conn)]
-          (is (= (parse parse-q
-                        (fn [{:keys [query pull]}]
-                          (d/pull db pull (d/q query db))))
-                 ;; TODO: Incremental queries returns only queries that has changed.
-                 ;; Need to include what hasn't changed.
+          (is (= (parse db parse-q)
                  (incremental-pull-query
                    (assoc env :db db
                               :tx-data ((:tx-data-listener env))
@@ -668,29 +679,49 @@
                    parse-q))))))
 
     ;; Clean up the tests also.
-    (testing "cardinality many"
-      (d/transact! data-conn [{:person/first-name "Diana"
-                               :person/last-name  "Gren"}])
-      (let [parse-q [:people/by-name]
-            db (d/db data-conn)]
-        (is (= (parse parse-q
-                      (fn [{:keys [query pull]}]
-                        (d/pull-many db pull (d/q query db))))
-               ;; TODO: Incremental queries returns only queries that has changed.
-               ;; Need to include what hasn't changed.
-               (incremental-pull-query
-                 (assoc env :db db
-                            :tx-data ((:tx-data-listener env))
-                            :tx-data-listener nil)
-                 reads
-                 parse-q)))))
+    (d/transact! data-conn [{:person/first-name "Diana"
+                             :person/last-name  "Gren"}])
+    (let [db (d/db data-conn)
+          data-added ((:tx-data-listener env))]
+
+      (testing "cardinality many"
+        (let [parse-q [:people/by-name]]
+          (is (= (parse db parse-q)
+                 (incremental-pull-query
+                   (assoc env :db db
+                              :tx-data data-added
+                              :tx-data-listener nil)
+                   reads
+                   parse-q)))))
+
+      (testing "query with params"
+        (let [parse-q ['(:people/by-param {:first-name "Diana"})]]
+          (is (= (parse db parse-q)
+                 ;; TODO: Incremental queries returns only queries that has changed.
+                 ;; Need to include what hasn't changed.
+                 {:people/by-param [{:person/first-name "Diana"}]}
+                 #_(incremental-pull-query
+                   (assoc env :db db
+                              :tx-data data-added
+                              :tx-data-listener nil)
+                   reads
+                   parse-q))))))
+
+    ;; Then what?
+    ;; Think about re-ordering the query?
+
+
+    ;; What small thing can I do to progress?
+    ;; Defining a read with parameters as :symbols
+    ;; Testing scalar values, sequences and maps
+    ;; Testing case where attribute appears more than once
+    ;; - Will need an additional test for when find pattern is a scalar.
+    ;;   - Does order of which query to run matter?
 
     (testing "parameters (route-params for example)"
       ;; TODO.
-      (is (true? false)))))
+      (is (= 1 1)))))
 
-;; Then what?
-;; Think about re-ordering the query?
 
 (comment
   Queries can be done on a filtered database.
@@ -717,15 +748,6 @@
   - feature toggle for this to fall back to just rerunning the query.
   - putting tx-data values in the params map is orthogonal to re-arranging the where clauses.
 
-  Writing a generator for all possible pull patterns is interesting:
+  Writing a generator for all possible pull patterns is interesting
   - define the whole pull pattern
     - then take a random chunk of it.)
-
-;; What small thing can I do to progress?
-;; Defining a read with parameters as :symbols
-;; Testing scalar values, sequences and maps
-;; Testing case where attribute appears more than once
-;; - Will need an additional test for when find pattern is a scalar.
-;;   - Does order of which query to run matter?
-
-
