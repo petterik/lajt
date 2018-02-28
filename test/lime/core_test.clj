@@ -649,7 +649,17 @@
                                              :find  '[?find-type .]}
                                             query-db
                                             k)]
-                      (let [res (d/q (extract-query query-db k) db)
+                      (let [query-params ((get-in reads [k :params-fn] (constantly nil))
+                                           params)
+                            res (apply
+                                  d/q
+                                  (update (extract-query query-db k)
+                                          :in
+                                          #(into (or % '[$])
+                                                 (map key)
+                                                 query-params))
+                                  db
+                                  (map val query-params))
                             pulled ((condp = find-type
                                       :scalar d/pull
                                       :collection d/pull-many
@@ -714,10 +724,7 @@
       (testing "query with params"
         (let [parse-q '[({:people/by-param [:person/first-name]} {:first-name "Diana"})]]
           (is (= (parse db parse-q)
-                 ;; TODO: Incremental queries returns only queries that has changed.
-                 ;; Need to include what hasn't changed.
-                 {:people/by-param [{:person/first-name "Diana"}]}
-                 #_(incremental-pull-query
+                 (incremental-pull-query
                    (assoc env :db db
                               :tx-data data-added
                               :tx-data-listener nil)
@@ -726,7 +733,6 @@
 
     ;; Then what?
     ;; Think about re-ordering the query?
-
 
     ;; What small thing can I do to progress?
     ;; Defining a read with parameters as :symbols
