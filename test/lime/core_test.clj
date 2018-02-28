@@ -741,6 +741,32 @@
     ;; - Will need an additional test for when find pattern is a scalar.
     ;;   - Does order of which query to run matter?
 
+    ;; Did something small (28 feb):
+    ;; - data flow is just like om.next
+    ;; - have something called params-fn, that returns symbols that are abound in the query.
+    ;;   - actual query params should probably be banned?
+    ;;   - params should only come from the environment or route-params?
+    ;;     - Yes? No?
+    ;; - What about separating our caching for different pull patterns?
+    ;;   - Start caching entities returned from query?
+    ;;   - Switch from "changed-attributes" approach to:
+    ;;     - "Which queries care about these entities"?
+    ;; - Also, incrementally updating pull patterns?
+    ;;   - Pull pattern merging?
+
+    ;; Wait.
+    ;; What's needed to ship something?
+    ;; Why do I care?
+    ;; It'd be nice to have something working, so I can focus on improving something shippable.
+    ;; re-ordering query is like the least needed thing for example. Ok. What do we need.
+
+    ;; We need merging of pull patterns, so that we can return a flat map with all the reads.
+    ;; We can re-run the d/pull(-many) everytime it changes, to ship something asap.
+    ;; We need a better definition of reads.
+    ;; We need to be able to "chain" reads together (for SULO).
+
+    ;; This is it?
+
     (testing "parameters (route-params for example)"
       ;; TODO.
       (is (= 1 1)))))
