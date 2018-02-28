@@ -764,6 +764,7 @@
     ;; We can re-run the d/pull(-many) everytime it changes, to ship something asap.
     ;; We need a better definition of reads.
     ;; We need to be able to "chain" reads together (for SULO).
+    ;; We need to handle "remote parsing" (with :target).
 
     ;; This is it?
 
