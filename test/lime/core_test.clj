@@ -51,10 +51,10 @@
 
 (s/def ::query (s/keys :req-un [:query/find :query/where]))
 
-(def schema {:query/id            {:db/unique      :db.unique/value}
+(def schema {:query/id            {:db/unique :db.unique/value}
              :query/where-clauses {:db/valueType   :db.type/ref
                                    :db/cardinality :db.cardinality/many}
-             :query/find-pattern  {:db/valueType   :db.type/ref}
+             :query/find-pattern  {:db/valueType :db.type/ref}
              :where.clause/parts  {:db/valueType   :db.type/ref
                                    :db/cardinality :db.cardinality/many}
              :where.clause/type   {:db/index true}
@@ -63,7 +63,9 @@
              :where.clause/eav    {:db/index true}
              :where.clause/idx    {:db/index true}
              :find.pattern/type   {:db/index true}
-             })
+             ;; For temporary data, to use together with d/db-with
+             :temp/changed-attr   {:db/cardinality :db.cardinality/many
+                                   :db/index       true}})
 
 
 (defn- index-where-clauses [where-clauses]
@@ -566,36 +568,32 @@
 (def reads
   {:person/by-name
    {:query {:find  '[?person .]
-            :where '[[?person :person/first-name ?fname]]}
-    ;; Remember: Pull is dynamic and should be passed in, not specified.
-    :pull  [:person/first-name]}
+            :where '[[?person :person/first-name ?fname]]}}
    :person/by-last-name
    {:query {:find  '[?person .]
-            :where '[[?person :person/last-name ?lname]]}
-    ;; Remember: Pull is dynamic and should be passed in, not specified.
-    :pull  [:person/last-name]}
+            :where '[[?person :person/last-name ?lname]]}}
    :people/by-name
    {:query {:find  '[[?person ...]]
-            :where '[[?person :person/first-name ?fname]]}
-    :pull  [:person/first-name]}
+            :where '[[?person :person/first-name ?fname]]}}
 
    :people/by-param
    {:query     {:find  '[[?person ...]]
                 :where '[[?person :person/first-name ?fname]]}
-    :pull      [:person/first-name]
     :params-fn (fn [{:keys [first-name]}]
                  {'?fname first-name})}})
+
+(s/conform ::query (-> reads :person/by-name :query))
 
 
 (defn parse [db query]
   ((parser/parser {:read
-                   (fn [{:keys [db]} k p]
+                   (fn [{:keys [db] :as env} k p]
                      (let [{:keys [query pull params-fn]} (get reads k)
                            query-input (when (some? params-fn) (params-fn p))
                            query (assoc query :in (into ['$] (map key) (seq query-input)))
                            res (apply d/q query db (map val (seq query-input)))]
                        ((if (number? res) d/pull d/pull-many)
-                         db pull res)))})
+                         db (:query env) res)))})
     {:db db}
     query))
 
@@ -624,37 +622,56 @@
      :tx-data-listener listener
      :cache            (atom {})}))
 
-(defn incremental-pull-query [{:keys [query-db db tx-data cache]} reads parse-q]
-  (let [reads-to-execute (d/q {:in    '[$ [[_ ?tx-attr] ...] [?query-id ...]]
-                               :where '[[?where :where.clause/value ?tx-attr]
-                                        [?where :where.clause/eav :a]
-                                        [?query :query/where-clauses ?where]
-                                        [?query :query/id ?query-id]]
-                               :find  '[[?query-id ...]]}
-                              query-db
-                              tx-data
-                              parse-q)]
-    (-> (swap! cache
-            into
-            (map (juxt identity
-                       ;; How do we know if it should be pull or pull-many?
-                       ;; TODO: Get information about the find-pattern from the query
-                       #(let [res (d/q (extract-query query-db %)
-                                       db)]
-                          ((if (number? res) d/pull d/pull-many)
-                            db
-                            ;; This should be passed in.
-                            (get-in reads [% :pull])
-                            res))))
-            reads-to-execute)
-        (select-keys parse-q))))
+(defn incremental-pull-query [env reads parse-q]
+  (let [env (update env :query-db
+                    d/db-with
+                    (seq (eduction
+                           (map #(nth % 1))
+                           (distinct)
+                           (map #(hash-map :temp/changed-attr %))
+                           (:tx-data env))))
+        ;; instead of "execute these reads"
+        ;; we've now moved the model to be
+        ;; check if we should update the result.
+        ;; Not sure this is a good thing.
+        parser (parser/parser
+                 {:read
+                  (fn [{:keys [query-db db cache query]} k params]
+                    (if-let [find-type (d/q {:in    '[$ ?query-id]
+                                             :where '[[?query :query/id ?query-id]
+                                                      [?query :query/where-clauses ?where]
+                                                      [?where :where.clause/eav :a]
+                                                      [?where :where.clause/value ?tx-attr]
+                                                      ;; If matches any of the changed attrs, it's a match.
+                                                      [_ :temp/changed-attr ?tx-attr]
+                                                      [?query :query/find-pattern ?find]
+                                                      [?find :find.pattern/type ?find-type]]
+                                             :find  '[?find-type .]}
+                                            query-db
+                                            k)]
+                      (let [res (d/q (extract-query query-db k) db)
+                            pulled ((condp = find-type
+                                      :scalar d/pull
+                                      :collection d/pull-many
+                                      (throw (ex-info (str "Cannot pull on query find-type:" find-type)
+                                                      {:find-type find-type
+                                                       :key       k
+                                                       :query     query
+                                                       :params    params})))
+                                     db
+                                     query
+                                     res)]
+                        (swap! cache assoc k pulled)
+                        pulled)
+                      (get @cache k)))})]
+    (parser env parse-q)))
 
 (deftest query-pull-test
   (let [data-conn (d/create-conn test-schema)
         env (init-env data-conn)]
     (testing "Cardinality one"
       (d/transact! data-conn [{:person/first-name "Petter"}])
-      (let [parse-q [:person/by-name]
+      (let [parse-q [{:person/by-name [:person/first-name]}]
             db (d/db data-conn)]
         (is (= (parse db parse-q)
                (incremental-pull-query
@@ -667,8 +684,8 @@
       (testing "Adding data to an existing entity"
         (d/transact! data-conn [{:person/first-name "Petter"
                                  :person/last-name  "Eriksson"}])
-        (let [parse-q [:person/by-name
-                       :person/by-last-name]
+        (let [parse-q [{:person/by-name [:person/first-name]}
+                       {:person/by-last-name [:person/last-name]}]
               db (d/db data-conn)]
           (is (= (parse db parse-q)
                  (incremental-pull-query
@@ -685,7 +702,7 @@
           data-added ((:tx-data-listener env))]
 
       (testing "cardinality many"
-        (let [parse-q [:people/by-name]]
+        (let [parse-q [{:people/by-name [:person/first-name]}]]
           (is (= (parse db parse-q)
                  (incremental-pull-query
                    (assoc env :db db
@@ -695,7 +712,7 @@
                    parse-q)))))
 
       (testing "query with params"
-        (let [parse-q ['(:people/by-param {:first-name "Diana"})]]
+        (let [parse-q '[({:people/by-param [:person/first-name]} {:first-name "Diana"})]]
           (is (= (parse db parse-q)
                  ;; TODO: Incremental queries returns only queries that has changed.
                  ;; Need to include what hasn't changed.

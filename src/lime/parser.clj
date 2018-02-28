@@ -58,6 +58,7 @@
 (defmethod parse :union
   [env [_ m]]
   (let [[k v] (first m)]
+    ;; Maybe lazily conform/unform ::unions and maybe even ::joins?
     (dispatch (assoc env :query (s/unform ::union-map v))
               k)))
 
