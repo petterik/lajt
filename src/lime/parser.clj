@@ -6,7 +6,7 @@
 (s/def ::read-exprs (s/coll-of ::read-expr :kind vector?))
 (s/def ::join (s/map-of ::id ::read-exprs :count 1))
 (s/def ::union-map (s/map-of keyword? ::read-exprs))
-(s/def ::union (s/map-of ::join ::union-map :count 1))
+(s/def ::union (s/map-of ::id ::union-map :count 1))
 
 (s/def ::param-expr (s/cat :expr (s/alt :id ::id
                                         :join ::join
@@ -52,8 +52,8 @@
 
 (s/def ::l-read-exprs vector?)
 (s/def ::l-join (s/map-of ::id ::l-read-exprs :count 1))
-(s/def ::l-union-map (s/map-of keyword? vector?))
-(s/def ::l-union (s/map-of keyword? ::l-union-map :count 1))
+(s/def ::l-union-map (s/map-of keyword? ::l-read-exprs))
+(s/def ::l-union (s/map-of ::id ::l-union-map :count 1))
 
 ;; End lazy query spec.
 
@@ -104,9 +104,35 @@
   [env [_ {:keys [expr params]}]]
   (parse (assoc env :params params) expr))
 
-(defn parser [{:keys [read mutate]}]
+(defn assert-spec [spec x]
+  (if (s/valid? spec x)
+    x
+    (let [ed (s/explain-data spec x)]
+      (throw (ex-info
+               (str "Spec assertion failed\n" (with-out-str (s/explain-out ed)))
+               ed)))))
+
+(defn- join? [env]
+  (vector? (:query env)))
+
+(defn- union? [env]
+  (map? (:query env)))
+
+(defn parser
+  [{:keys [read mutate]}]
   (fn self [env query]
-    (let [env (cond-> (assoc env :read read :mutate mutate)
+    (assert-spec ::query query)
+    (let [read (fn [{:keys [query] :as env} k p]
+                 ;; Since this parser conforms the whole query at once, we want to
+                 ;; unform the :query before calling read.
+                 (let [env (cond-> env
+                                   (join? env)
+                                   (update :query #(s/unform ::read-exprs %))
+                                   (union? env)
+                                   (update :query #(s/unform ::union-map %)))]
+                   (read env k p)))
+          env (cond-> (assoc env :read read
+                                 :mutate mutate)
                       ;; Allow the user to have a pointer to the root parser in the env.
                       (nil? (:parser env))
                       (assoc :parser self))]
@@ -114,7 +140,7 @@
            ;; bubble mutations to the top.
            (sort-by (comp {:mutate 0 :read 1} first))
            (into {}
-             (map (partial parse env)))))))
+                 (map (partial parse env)))))))
 
 (defn- get-name
   "Takes a keyword or a string and returns the string, namespace or the name of it."
@@ -133,9 +159,8 @@
    * :union-namespace <string or keyword>,
                       specifying a namespace to recursively
                       parse only a selected union(path).
-   * :union-selector <4-arity fn>,
-                     Passed [env k p union-map], same as `read` but
-                     with an additional union-map arugment.
+   * :union-selector <3-arity fn>,
+                     Passed [env k p], same as `read`.
                      Returns a key in the union and only that
                      part of the union is parsed.
 
@@ -146,6 +171,7 @@
     :or {union-namespace "route"
          join-namespace "child"}}]
   (fn self [env query]
+    (s/assert ::query query)
     (let [read (fn [env k p]
                  (let [[dispatch-key dispatch-val] (:dispatched-by env)]
                    (cond
@@ -154,9 +180,8 @@
                              (get-name k)))
                      (let [[_ join-val] (first dispatch-val)
                            conformed (s/conform (s/coll-of ::l-read-expr :kind vector?) join-val)]
-                       (prn "conf: " conformed " join val: " join-val)
                        (into {}
-                             (map (partial parse env))
+                             (map (partial parse (dissoc env :query)))
                              conformed))
 
                      (and (= :union dispatch-key)
@@ -167,13 +192,12 @@
                                (throw (ex-info "Dispatching on union-namespace but :union-selector was nil!"
                                                {:key           k
                                                 :dispatched-by (:dispatched-by env)})))
-                           selected-path (union-selector env k p (:query env))
+                           selected-path (union-selector env k p)
                            selected-union (get union-val selected-path)
                            conformed-union (s/conform (s/coll-of ::l-read-expr :kind vector?)
                                                       (get union-val selected-path))]
-                       (prn [selected-path selected-union conformed-union])
                        (into {}
-                             (map (partial parse env))
+                             (map (partial parse (dissoc env :query)))
                              conformed-union))
 
                      :else (read env k p))))
@@ -185,64 +209,3 @@
            (sort-by (comp {:mutate 0 :read 1} first))
            (into {}
                  (map (partial parse env)))))))
-
-(comment
-  (def test-queries '[:read-key
-                      {:join/a [:read-key]}
-                      {:join/b [{:join/a [:read-key]}]}
-                      {:union/a {:union.a/x [:read-key]
-                                 :union.a/y [{:join/a [:read-key]}]}}
-                      (:read-key2 {:param 1})
-                      ({:join/c [:read-key]} {:param 1})
-                      ({:union/b {:union.b/a [:read-key]}} {:param 1})
-                      (mutate-no-params)
-                      (mutate-with-params {:param 1})])
-
-  (s/conform ::query test-queries)
-
-  (s/conform ::query [:foo])
-  (parse {:read prn :mutate prn} (first (s/conform ::query [:foo])))
-  (parse {:read prn :mutate prn} (first (s/conform ::query [{:foo [:bar]}])))
-  (parse {:read prn :mutate prn} (first (s/conform ::query [{:foo {:baz [:bar]}}])))
-  (parse {:read prn :mutate prn} (first (s/conform ::query '[(:foo {:p 1})])))
-  (parse {:read prn :mutate prn} (first (s/conform ::query '[(foo {:p 1})])))
-
-  (->> test-queries
-       (s/conform ::query)
-       (sort-by (comp {:mutate 0 :read 1} first))
-       (into {}
-             (map (partial parse {:read prn :mutate prn}))))
-
-  (->> test-queries
-       (s/conform ::l-query)
-       (sort-by (comp {:mutate 0 :read 1} first))
-       (into {}
-             (comp (map #(doto % prn))
-                   (map (partial parse {:read prn :mutate prn})))))
-
-  (s/explain ::l-query [{:join/a [:read-key]}])
-  (time (dotimes [_ 1000] (s/conform ::query test-queries)))
-  (time (dotimes [_ 1000] (s/conform ::l-query test-queries)))
-
-  ((lazy-parser {:read           prn
-                 :join-namespace "proxy"})
-    {}
-    [:read
-     {:proxy/foo [{:read2 [:key]}
-                  :read3]}
-     {:join/read4 [:read5]}])
-
-  ((lazy-parser {:read            prn
-                 :union-namespace "union"
-                 :union-selector  (fn [env k p union-map]
-                                    (->> union-map
-                                         keys
-                                         (map name)
-                                         sort
-                                         last
-                                         keyword))})
-    {}
-    [{:union/x {:a [:read1]
-                :b [:read2]
-                :c [:read3]}}])
-  )
