@@ -2,7 +2,9 @@
   (:require
     [clojure.test :as t :refer [deftest is are testing]]
     [lime.parser :as parser]
-    [clojure.spec.alpha :as s]))
+    [clojure.spec.alpha :as s]
+    [clojure.spec.test.alpha :as st]
+    [clojure.spec.gen.alpha :as gen]))
 
 (defn- read-mutate-handler [{:keys [query]} k p]
   (cond-> {}
@@ -74,4 +76,93 @@
               :union/with-ns {:read {}}
               :custom-union {:query {:a [:read1]
                                      :b [:read2]}}})))))
+
+(deftest query-merging
+  (are [query pattern-map] (= pattern-map
+                              (parser/query->pattern-map query))
+    [:a :b] {:a nil :b nil}
+
+    [{:read-key [:a]}] {:read-key {:a nil}}
+    [{:read-key [:a]} {:read-key [:b]}] {:read-key {:a nil :b nil}}
+
+    [{:read-key [:a]} {:read-key [{:a [:x]}]}] {:read-key {:a {:x nil}}}
+    [{:read-key [{:a [:y]}]} {:read-key [{:a [:x]}]}] {:read-key {:a {:x nil :y nil}}}
+    [{:read-key [{:a [:x :y]}]} {:read-key [{:a [:x]}]}] {:read-key {:a {:x nil :y nil}}}
+
+    ;; Params
+    '[(:read-key {:param 1})] {[:read-key {:param 1}] nil}
+    '[({:read-key [:a]} {:param 1})] {[:read-key {:param 1}] {:a nil}}
+    '[({:read-key [:a :b]} {:param 1})
+      ({:read-key [{:a [:x]}]} {:param 1})] {[:read-key {:param 1}] {:a {:x nil} :b nil}}
+
+    ;; Different params don't merge
+    '[({:read-key [:a]} {:param 1})
+      ({:read-key [:a]} {:param 2})] {[:read-key {:param 1}] {:a nil} [:read-key {:param 2}] {:a nil}})
+
+  (is (thrown-with-msg? Exception #"Unions.*not allowed"
+                        (parser/query->pattern-map [{:union {:a [:b]}}])))
+
+
+  (are [pattern-map query] (= query (parser/pattern-map->query pattern-map))
+    {:read-key nil} [:read-key]
+    {:read-key {:a nil}} [{:read-key [:a]}]
+
+    {:read-key {:a nil :b nil}} [{:read-key [:a :b]}]
+
+    ;; Params
+    {[:read-key {:param 1}] nil} '[(:read-key {:param 1})]
+    {[:read-key {:param 1}] {:a nil}
+     [:read-key {:param 2}] {:a nil}} '[({:read-key [:a]} {:param 1}) ({:read-key [:a]} {:param 2})]
+    )
+
+  (are [query merged] (= merged (parser/merge-read-queries query))
+    [:a :b] [:a :b]
+
+    [{:read [:a]}
+     {:read [:b]}]
+    [{:read [:a :b]}]
+
+    '[({:read-key [:a :b]} {:param 1})
+      ({:read-key [{:a [:x]}]} {:param 1})]
+    '[({:read-key [{:a [:x]} :b]} {:param 1})]
+
+    '[({:read-key [:a]} {:param 1})
+      ({:read-key [:a]} {:param 2})]
+    '[({:read-key [:a]} {:param 1}) ({:read-key [:a]} {:param 2})])
+
+  ;; Keeping order of the pattern is nice to have.
+  (let [keyword-vec [:a :b :c :d :e :f :g :h :i :j :k :l :m :n :o :p]]
+    (testing "keeping order of the query"
+      (are [query merged] (= merged (parser/merge-read-queries query))
+        keyword-vec
+        keyword-vec
+
+        ;; Joins
+        (mapv #(hash-map % [:x]) keyword-vec)
+        (mapv #(hash-map % [:x]) keyword-vec)
+
+        ;; Merged joins with enough entries to cause un-ordered maps.
+        (->> (cycle keyword-vec)
+             (take 100)
+             (map-indexed (fn [i k]
+                            {k [(keyword (str i))]}))
+             (vec))
+
+        ;; Should result in:
+        ;; [{:a [:0 :16 :32 :48 :64 :80 :96]}
+        ;; {:b [:1 :17 :33 :49 :65 :81 :97]}
+        ;; {:c [:2 :18 :34 :50 :66 :82 :98]}
+        ;; {:d [:3 :19 :35 :51 :67 :83 :99]}
+        ;; {:e [:4 :20 :36 :52 :68 :84]}
+        ;; ... etc
+        ;; ]
+        (->> (cycle keyword-vec)
+             (take 100)
+             (map-indexed (fn [i k]
+                            {k [(keyword (str i))]}))
+             (apply parser/merge-ordered-with (fn [a b]
+                                                (into (cond-> a (number? a) [a])
+                                                      (cond-> b (number? b) [b]))))
+             (map (fn [[k v]]
+                    {k v})))))))
 

@@ -3,10 +3,10 @@
 
 ;; TODO: Support idents?
 (s/def ::id keyword?)
-(s/def ::read-exprs (s/coll-of ::read-expr :kind vector?))
-(s/def ::join (s/map-of ::id ::read-exprs :count 1))
-(s/def ::union-map (s/map-of keyword? ::read-exprs))
-(s/def ::union (s/map-of ::id ::union-map :count 1))
+(s/def ::read-exprs (s/coll-of ::read-expr :kind vector? :gen-max 3))
+(s/def ::join (s/map-of ::id ::read-exprs :count 1 :gen-max 3))
+(s/def ::union-map (s/map-of keyword? ::read-exprs :gen-max 3))
+(s/def ::union (s/map-of ::id ::union-map :count 1 :gen-max 3))
 
 (s/def ::param-expr (s/cat :expr (s/alt :id ::id
                                         :join ::join
@@ -66,7 +66,7 @@
               k
               (:params env))]))
 
-(defmulti parse (fn [env expr] (nth expr 0)))
+(defmulti parse (fn [env expr] (first expr)))
 (defmethod parse :default
   [env expr]
   (throw (ex-info "Unknown call method." {:env env :expr expr})))
@@ -209,3 +209,97 @@
            (sort-by (comp {:mutate 0 :read 1} first))
            (into {}
                  (map (partial parse env)))))))
+
+;; Merging queries
+
+(defn- order-keeping-map
+  ([] {})
+  ([ms]
+   (let [key-order (into {}
+                         (comp (mapcat keys)
+                               (distinct)
+                               (map-indexed #(vector %2 %1)))
+                         ms)]
+     (sorted-map-by #(compare (get key-order %1 Integer/MAX_VALUE)
+                              (get key-order %2 Integer/MAX_VALUE))))))
+
+(defn merge-ordered-with [f & ms]
+  (let [merge-entry (fn [m e]
+                      (let [k (key e) v (val e)]
+                        (if (contains? m k)
+                          (assoc m k (f (get m k) v))
+                          (assoc m k v))))
+        merge2 (fn [m1 m2]
+                 (reduce merge-entry m1 (seq m2)))]
+    (reduce merge2 (order-keeping-map ms) ms)))
+
+(defn- merge-ordered [& ms]
+  (into (order-keeping-map ms) cat ms))
+
+(defn- assoc-ordered [m k v]
+  (merge-ordered m {k v}))
+
+(defmulti ->pattern-map (fn [env expr] (first expr)))
+(defmethod ->pattern-map :read
+  [m [_ expr]]
+  (->pattern-map m expr))
+
+(defmethod ->pattern-map :join
+  [{::keys [params] :as m} [_ join]]
+  (let [[k v] (first join)]
+    ;; Updates the key which is a pair of key+params.
+    (merge-ordered-with #(merge-ordered-with merge %1 %2)
+                        (dissoc m ::params)
+                        {(cond-> k (some? params) (vector params))
+                         (reduce ->pattern-map (order-keeping-map) v)})))
+
+(defmethod ->pattern-map :id
+  [{::keys [params] :as m} [_ v]]
+  (let [key (cond-> v (some? params) (vector params))]
+    (-> m
+        (dissoc ::params)
+        (assoc-ordered key nil))))
+
+(defmethod ->pattern-map :param-expr
+  [m [_ {:keys [expr params]}]]
+  (->pattern-map (assoc m ::params params) expr))
+
+(defmethod ->pattern-map :union
+  [m expr]
+  (throw (ex-info (str "Unions are not allowed when merging pull patterns."
+                       " Resolve all unions in the query before passing it"
+                       " to this function")
+                  {:map-so-far m :expr expr})))
+
+(defn query->pattern-map [query]
+  (reduce ->pattern-map {} (s/conform ::query query)))
+
+(query->pattern-map '[(:foo {:a 1})])
+(query->pattern-map [{:read-key [:a]}])
+(query->pattern-map [:a :b :c])
+
+(defn pattern-map->query [pattern-map]
+  (letfn [(kv->pattern-item [[id v]]
+            (let [[k params] (cond-> id (keyword? id) vector)]
+              (cond-> (if (map? v)
+                        {k (mapv kv->pattern-item v)}
+                        k)
+                      (some? params)
+                      (list params))))]
+    (into []
+          (map kv->pattern-item)
+          pattern-map)))
+
+(defn merge-read-queries
+  "Takes a query (without unions), where all the joins corresponds to a `read-root` + a pattern,
+  merges all the patterns for all read-roots and returns a new query."
+  [query]
+  (-> (query->pattern-map query)
+      (pattern-map->query)))
+
+(comment
+  (merge-read-queries [{:read-key {:foo [:a]}}])
+  [{:read-key [:a]}] -> {:read-key {:a nil}} -> [{:read-key [:a]}]
+  [{:read-key [:a]} {:read-key [:b]} -> {:read-key {:a nil :b nil}} -> [{:read-key [:a :b]}]]
+
+  )
