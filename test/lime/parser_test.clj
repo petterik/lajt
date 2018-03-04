@@ -166,3 +166,26 @@
              (map (fn [[k v]]
                     {k v})))))))
 
+(deftest dedupe-query-test
+  (let [parser (parser/lazy-parser {:read            read-mutate-handler
+                                    :join-namespace  :join
+                                    :union-namespace :union
+                                    :union-selector  (constantly ::selected)})]
+    (are [query deduped] (= deduped
+                            (parser/dedupe-query parser query))
+      [{:join [:read]} {:read [:a]}]
+      [{:read [:a]}]
+
+      ;; unions, mutations and nested joins. Complex stuff.
+      '[{:read [:a {:b [:x]}]}
+        {:union {::selected [{:read [:c]}
+                             :read2]}}
+        (foo {:bar 1})
+        {:join/a [{:join/b [{:read [{:a [:x]} {:b [:y]} :d]}]}]}]
+
+      '[(foo {:bar 1})
+        {:read [{:a [:x]}
+                {:b [:x :y]}
+                :c
+                :d]}
+        :read2])))

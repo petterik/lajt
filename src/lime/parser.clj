@@ -95,7 +95,7 @@
               expr)))
 
 (defmethod parse :mutate
-  [env [_ {:keys [id params]} :as expr]]
+  [env [_ {:keys [id params] :as expr}]]
   (dispatch (assoc env ::type :mutate :params params)
             id
             expr))
@@ -168,47 +168,49 @@
   - Pull patterns of reads.
   - Every branch of an union. Only the selected one(s)."
   [{:keys [read mutate join-namespace union-namespace union-selector]
-    :or {union-namespace "route"
-         join-namespace "child"}}]
-  (fn self [env query]
-    (s/assert ::query query)
-    (let [read (fn [env k p]
-                 (let [[dispatch-key dispatch-val] (:dispatched-by env)]
-                   (cond
-                     (and (= :join dispatch-key)
-                          (= (get-name join-namespace)
-                             (get-name k)))
-                     (let [[_ join-val] (first dispatch-val)
-                           conformed (s/conform (s/coll-of ::l-read-expr :kind vector?) join-val)]
-                       (into {}
-                             (map (partial parse (dissoc env :query)))
-                             conformed))
+    :as config}]
+  (fn self
+    ([] config)
+    ([env query]
+     (s/assert ::query query)
+     (let [read (fn [env k p]
+                  (let [[dispatch-key dispatch-val] (:dispatched-by env)]
+                    (cond
+                      (and (= :join dispatch-key)
+                           (some? join-namespace)
+                           (= (get-name join-namespace)
+                              (get-name k)))
+                      (let [[_ join-val] (first dispatch-val)
+                            conformed (s/conform (s/coll-of ::l-read-expr :kind vector?) join-val)]
+                        (into {}
+                              (map (partial parse (dissoc env :query)))
+                              conformed))
 
-                     (and (= :union dispatch-key)
-                          (= (get-name union-namespace)
-                             (get-name k)))
-                     (let [[_ union-val] (first dispatch-val)
-                           _ (when (nil? union-selector)
-                               (throw (ex-info "Dispatching on union-namespace but :union-selector was nil!"
-                                               {:key           k
-                                                :dispatched-by (:dispatched-by env)})))
-                           selected-path (union-selector env k p)
-                           selected-union (get union-val selected-path)
-                           conformed-union (s/conform (s/coll-of ::l-read-expr :kind vector?)
-                                                      (get union-val selected-path))]
-                       (into {}
-                             (map (partial parse (dissoc env :query)))
-                             conformed-union))
+                      (and (= :union dispatch-key)
+                           (some? union-namespace)
+                           (= (get-name union-namespace)
+                              (get-name k)))
+                      (let [[_ union-val] (first dispatch-val)
+                            _ (when (nil? union-selector)
+                                (throw (ex-info "Dispatching on union-namespace but :union-selector was nil!"
+                                                {:key           k
+                                                 :dispatched-by (:dispatched-by env)})))
+                            selected-path (union-selector env k p)
+                            conformed-union (s/conform (s/coll-of ::l-read-expr :kind vector?)
+                                                       (get union-val selected-path))]
+                        (into {}
+                              (map (partial parse (dissoc env :query)))
+                              conformed-union))
 
-                     :else (read env k p))))
-          env (cond-> (assoc env :read read :mutate mutate)
-                      ;; Allow the user to have a pointer to the root parser in the env.
-                      (nil? (:parser env))
-                      (assoc :parser self))]
-      (->> (s/conform ::l-query query)
-           (sort-by (comp {:mutate 0 :read 1} first))
-           (into {}
-                 (map (partial parse env)))))))
+                      :else (read env k p))))
+           env (cond-> (assoc env :read read :mutate mutate)
+                       ;; Allow the user to have a pointer to the root parser in the env.
+                       (nil? (:parser env))
+                       (assoc :parser self))]
+       (->> (s/conform ::l-query query)
+            (sort-by (comp {:mutate 0 :read 1} first))
+            (into {}
+                  (map (partial parse env))))))))
 
 ;; Merging queries
 
@@ -297,9 +299,22 @@
   (-> (query->pattern-map query)
       (pattern-map->query)))
 
-(comment
-  (merge-read-queries [{:read-key {:foo [:a]}}])
-  [{:read-key [:a]}] -> {:read-key {:a nil}} -> [{:read-key [:a]}]
-  [{:read-key [:a]} {:read-key [:b]} -> {:read-key {:a nil :b nil}} -> [{:read-key [:a :b]}]]
-
-  )
+;; Deduping query recursively
+(defn dedupe-query
+  "Takes a lazy-parser and a query, returns a new query where the reads
+  have merged pull patterns."
+  [l-parser query]
+  (let [reads (atom [])
+        mutates (atom [])
+        config (l-parser)
+        parser (lazy-parser
+                 (assoc config
+                   :read (fn [env _ params]
+                           (swap! reads conj
+                                  (cond-> (s/unform ::l-read-expr (:dispatched-by env))
+                                          (some? params)
+                                          (list params))))
+                   :mutate (fn [env _ _]
+                             (swap! mutates conj (s/unform ::mutation-expr (:dispatched-by env))))))]
+    (parser {} query)
+    (into @mutates (merge-read-queries @reads))))
