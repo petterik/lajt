@@ -41,14 +41,14 @@
       (parser/parser {:mutate read-mutate-handler
                       :read   read-mutate-handler}))
     (parse-test-query
-      (parser/lazy-parser {:mutate read-mutate-handler
-                           :read   read-mutate-handler}))))
+      (parser/eager-parser {:mutate read-mutate-handler
+                            :read   read-mutate-handler}))))
 
 (deftest recursive-dispatch-parsing-test
-  (let [parser (parser/lazy-parser {:read read-mutate-handler
-                                    :join-namespace "join"
+  (let [parser (parser/parser {:read                 read-mutate-handler
+                                    :join-namespace  "join"
                                     :union-namespace "union"
-                                    :union-selector (fn [{:keys [query]} k p]
+                                    :union-selector  (fn [{:keys [query]} k p]
                                                       (assert (contains? query ::selected))
                                                       ::selected)})]
     (testing "joins"
@@ -167,7 +167,7 @@
                     {k v})))))))
 
 (deftest dedupe-query-test
-  (let [parser (parser/lazy-parser {:read            read-mutate-handler
+  (let [parser (parser/parser {:read                 read-mutate-handler
                                     :join-namespace  :join
                                     :union-namespace :union
                                     :union-selector  (constantly ::selected)})]
@@ -188,4 +188,13 @@
                 {:b [:x :y]}
                 :c
                 :d]}
-        :read2])))
+        :read2])
+
+    ;; Ok, this is cool and all. But what happens when one parses a
+    ;; query with the same read that has different params?
+    '[({:read [:a]} {:param 1})
+      ({:read [:a]} {:param 2})]
+    ;; Should only be a problem for remote queries?
+    ;; (as query params are banned for local reads).
+    ;; Created https://github.com/petterik/lajt/issues/2
+    ))

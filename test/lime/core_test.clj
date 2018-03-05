@@ -761,8 +761,18 @@
     ;; re-ordering query is like the least needed thing for example. Ok. What do we need.
 
     ;; We need merging of pull patterns, so that we can return a flat map with all the reads.
-    ;; We can re-run the d/pull(-many) everytime it changes, to ship something asap.
+    ;; - We can re-run the d/pull(-many) everytime the pull pattern for a read changes.
+    ;; - Done. 5 March.
     ;; We need a better definition of reads.
+    ;; - To get here, I think we need to separate the caching for pull patterns and entities?
+    ;; - Incremental read is very gross.
+    ;; - Switch to a "is this a changed or new datom?" thing?
+    ;;   - If it's a changed, does any read care about this entity?
+    ;;   - For the queries that care, can we limit the query to only focus on this datom?
+    ;;   - OR: is this just an optimization?
+    ;; - What about just writing the definition that I'd like for the reads?
+    ;;   - Wishful thinking.
+    ;;   - Maybe get "chaining reads" in there as well.
     ;; We need to be able to "chain" reads together (for SULO).
     ;; We need to handle "remote parsing" (with :target).
 

@@ -118,7 +118,8 @@
 (defn- union? [env]
   (map? (:query env)))
 
-(defn parser
+(defn eager-parser
+  "Conforms the whole query - including pull pattern. Takes :read and :mutate keys."
   [{:keys [read mutate]}]
   (fn self [env query]
     (assert-spec ::query query)
@@ -150,7 +151,7 @@
     (or (namespace k)
         (name k))))
 
-(defn lazy-parser
+(defn parser
   "Like parser, but parses unions and joins lazily and more effectively.
   Takes:
    * :join-namespace <string or keyword>,
@@ -301,13 +302,13 @@
 
 ;; Deduping query recursively
 (defn dedupe-query
-  "Takes a lazy-parser and a query, returns a new query where the reads
+  "Takes a parser and a query, returns a new query where the reads
   have merged pull patterns."
   [l-parser query]
   (let [reads (atom [])
         mutates (atom [])
         config (l-parser)
-        parser (lazy-parser
+        parser (parser
                  (assoc config
                    :read (fn [env _ params]
                            (swap! reads conj
