@@ -900,3 +900,19 @@
 ;; 2. Separate reads that can be optimized.
 ;; 3b. Run optimized reads.
 ;; 3a. Full re-run of remaining reads.
+
+;; About remote data fetching:
+;; We can put :remote true in the query map!!
+;; The reason we didn't want to do it with om.next was because it
+;; executed the read (created a value). The return from our map
+;; declares what should be created and doesn't create anything.
+;; So creating something that works with om.next should be pretty
+;; straight forward! (jinx).
+;; We just need to handle GH issue #2 for remote data stuff.
+
+;; Another thing - Datascript/Datomic integration.
+;; We should use a map of functions instead of the datascript/datomic
+;; functions right away, making it easy to use either one.
+;; It should also make it easier to use datomic.client.api instead of
+;; datomic.api (?).
+
