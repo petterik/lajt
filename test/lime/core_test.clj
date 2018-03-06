@@ -782,6 +782,7 @@
       ;; TODO.
       (is (= 1 1)))))
 
+;; Let's figure out a good "definition of reads":
 (def read-registry (atom {}))
 (defmacro defread [k read-map]
   `(do
@@ -875,6 +876,12 @@
 ;; Instead of having this :params fn one could do something like:
 :params {'[?person ...] {:depends ::people}
          '?email        {:route-param :email}}
+;; or with vectors for keys, making it possible to have any number
+;; of nested keys. Making it easier to understand how it's used also.
+:params {'[?person ...] [:depends ::people]
+         ;; Look how easy it is to get the route now.
+         '?route        [:route]
+         '?email        [:route-param :email]}
 ;; ... That's actually quite neat.
 ;; Hmm.. this sugar is nice.
 ;; I think params should be either a map or a function.
