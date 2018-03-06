@@ -888,3 +888,15 @@
 ;; In most cases, a map would be sufficient. (I think).
 
 ;; TODO: Implement something taking a read like this and executing it.
+
+;; Thought: What if instead of "figure out which reads to run", we
+;;          figure out which reads we don't need to run.
+;; I like that. That way, if we can't prove that a read hasn't changed
+;; we need to re-run it some way.
+;; This breaks the reactive algorithm apart:
+;; 1. Filter out reads that don't need to run.
+;;    * Might be harder to prove that it doesn't need to be run though.
+;;    * Not sure.
+;; 2. Separate reads that can be optimized.
+;; 3b. Run optimized reads.
+;; 3a. Full re-run of remaining reads.
