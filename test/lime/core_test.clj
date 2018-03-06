@@ -782,32 +782,102 @@
       ;; TODO.
       (is (= 1 1)))))
 
+(def read-registry (atom {}))
+(defmacro defread [k read-map]
+  `(do
+     (let [read-map# ~read-map
+           k# ~k]
+       (when (and (contains? @read-registry k#)
+                  (not= (get @read-registry k#)
+                        read-map#))
+         (prn "WARN: read-registry already contained key: " k#
+              " and it's being replaced with a new value."
+              " Was: " (get @read-registry k#)
+              " Replacing with: " read-map#))
+       (when-not (s/valid? ::query (:query read-map#))
+         (prn "WARN: :query for read: " k# " did not pass query spec.")
+         (prn (s/explain-str ::query (:query read-map#))))
+       (swap! read-registry assoc k# read-map#))))
 
-(comment
-  Queries can be done on a filtered database.
-  - wait, no?
-    - because what if there's an attribute that appears in two where clauses.
-    - one pass it wants a filter, the other one it doesn't.
-      - this is a problem anyway, which will lead to having to run two queries.
-    - but we could do this for queries that doesn't have an attribute that appears twice.
-    - could also fallback on re-running the query when it appears more than once.
+(defmulti read-local (fn [env k p] k))
+(defmethod read-local :default
+  [env k p]
+  (if-let [read-map (get @read-registry k)]
+    (do 'something-maybe?)
+    (throw (ex-info "read not implemented: " k))))
 
-  Moving where clauses around might still be a good idea
-  - property based tests can provide good benchmarks.
-    - just save the data that were generated.
+(defread ::people
+  {:query  '{:find  [?e .]
+             :where [[?e :person/first-name ?name]]}
+   :sort   {:by    :person/first-name
+            :order :decending}
+   :params (fn [route route-params]
+             (when (= :person route)
+               {'?name (:name route-params)}))})
+;; Implicit pull one/all when called with pull pattern.
+;; - To think about when accessing the result:
+;;   - If 2 component has the read, one with a pull pattern and one
+;;     doesn't, the query will be deduped to contain the pull pattern
+;;     so it must be possible to get the result without the implicit pull.
 
-  The parameters I'm thinking is our :symbols map.
-  - values may need to be functions taking additional values when they are destructing values in a weird way.
-  - scalar values can be turned in to vectors
-  - sequences can be concatenated.
-  - maps will need a function.
-    - For destructoring
-  - this would probably do it though.
 
-  But yeah, if the attribute appears more than once, it'll need multiple queries to be run.
-  - feature toggle for this to fall back to just rerunning the query.
-  - putting tx-data values in the params map is orthogonal to re-arranging the where clauses.
+;; reads:
+;; keyword -> map
+;; Works for multimethods and maps (for testing).
+;; Multi method can be wrapped in a small macro to make it look like this:
+(defmulti read-local2 (fn [k] k))
+(defmacro defread2 [k read-map]
+  `(defmethod read-local2 ~k [_] ~read-map))
 
-  Writing a generator for all possible pull patterns is interesting
-  - define the whole pull pattern
-    - then take a random chunk of it.)
+(defread ::people
+  {:query  '{:find  [?e .]
+             :where [[?e :person/first-name ?name]]}
+   :sort   {:by    :person/first-name
+            :order :decending}
+   ;; I think it's fine to have route in the "env" map, since the :route key was
+   ;; never used in the sulo reads.
+   :params (fn [{:keys [route]} route-params]
+             (when (= :person route)
+               {'?name (:name route-params)}))})
+
+;; I like this. It should do the trick.
+;; I should make it easy to add before/after middleware to each/all reads/mutates.
+;; It doesn't necessarily want to exist in this map.
+;; Something to think about.
+;; Hint: look at what middleware we had for sulo.
+
+;; What about read dependencies though?
+(defread ::addresses
+  {:query      '{:find  [?e]
+                 :where [[?e :address/email ?email]
+                         [?e :address/person ?person]]}
+   ;; Depends on reads in this vector (or set).
+   :depends-on [::people]
+   ;; Pass the depends results in to the params.
+   ;; Still unsure if the params fn should take a map or
+   ;; something like: [env route-params depends].
+   :params     (fn [{:keys [depends route-params]}]
+                 ;; What to do about nil values?
+                 ;; We could make this declarative like:
+                 {'[?person ...] (::people depends)
+                  '?email        (:email route-params)}
+                 ;; But this would yield different results from:
+                 (cond-> {}
+                         (some? (::people depends))
+                         (assoc '[?person ...] (::people depends))
+                         (some? (:email route-params))
+                         (assoc '?email (:email route-params)))
+                 ;; I think it makes sense to just mean different things
+                 ;; depending on how one declares the params, INSTEAD OF
+                 ;; removing symbols mapped to nil values.
+                 )})
+
+;; Instead of having this :params fn one could do something like:
+:params {'[?person ...] {:depends ::people}
+         '?email        {:route-param :email}}
+;; ... That's actually quite neat.
+;; Hmm.. this sugar is nice.
+;; I think params should be either a map or a function.
+;; In most cases, a map would be sufficient. (I think).
+
+;; TODO: Implement something taking a read like this and executing it.
