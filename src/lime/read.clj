@@ -16,7 +16,7 @@
 
     :else (throw (ex-info ":params need to be a map or a function." {:read-map read-map}))))
 
-{'[?person ...] [:depends ::people]
+{'[?person ...] [:depends-on ::people]
  ;; Look how easy it is to get the route now.
  '?route        [:route]
  '?email        [:route-param :email]}
@@ -97,12 +97,23 @@
                        :query     (:query env)
                        :find-type find-type})))))
 
-(defn perform-read [env read-map]
-  (cond->> (perform-query env read-map)
-           (some? (:sort read-map))
-           (sort-result env read-map)
-           (not-empty (:query env))
-           (perform-pull env read-map)))
+(defn perform-read [{::keys [reads read-key] :as env}]
+  (let [read-map (reads read-key)
+        deps (:depends-on read-map)
+        env (reduce (fn [env dep]
+                      (if (some? (get-in env [::results dep]))
+                        env
+                        (perform-read (assoc env ::read-key dep))))
+                    env
+                    deps)
+        env (assoc env :depends-on (select-keys (::results env) deps))]
+    (assoc-in env
+              [::results read-key]
+              (cond->> (perform-query env read-map)
+                       (some? (:sort read-map))
+                       (sort-result env read-map)
+                       (not-empty (:query env))
+                       (perform-pull env read-map)))))
 
 {:query      '{:find  [?e .]
                :where [[?e :address/email ?email]
@@ -130,8 +141,10 @@
 
 (defn om-next-read [lime-reads]
   (fn [env k p]
-    (let [env (assoc env :params p :read-key k)
-          read-map (lime-reads k)]
+    (let [env (assoc env :params p
+                         ::read-key k
+                         ::reads lime-reads)]
       (if-let [remote (:target env)]
-        (select-keys read-map [remote])
-        {:value (perform-read env read-map)}))))
+        (select-keys (lime-reads k) [remote])
+        {:value (-> (perform-read env)
+                    (get-in [::results k]))}))))
