@@ -916,3 +916,39 @@
 ;; It should also make it easier to use datomic.client.api instead of
 ;; datomic.api (?).
 
+;; About getting tx-data between reads:
+;; We have to keep in mind that the app-state can jump between values
+;; via datascript.core/reset!. Use cases:
+;; * Time travel
+;; * git rebase
+;; Have thought about storing the tx-data in the datascript db/conn,
+;; to be consistent between these jumps. But how would the reads know
+;; what has happened between their optimistic read and the new jump.
+;; For example:
+;; - App state: db1
+;; - * remote&optimistic transaction happens *
+;; - App state: db2' and db2-pending
+;; - * reads read and cache db2 stuff *
+;; - * Another local transaction on db2' happens *
+;; - App state: db2'' and db2-pending.
+;; - * Reads have now cached results for db2'' *
+;; - * I'm now realizing that we could save the value of the
+;;     read cache for when we git-rebase db2-pending.
+;;     Such that when we finally d/reset! the app-state to db2,
+;;     we can also reset the read-cache to "read-cache2", and
+;;     have the tx-data from the d/transact! or d/db-with calls. *
+;; - So app-state is now: [db2'' read-db2''] [db2-pending, read-db1].
+;; - * result from remote query is received, creating db2 from db2-pending
+;;     (which is db1). *
+;; - * (let [{:keys [db-after tx-report]} (d/with db1 remote-response)
+;;           ;; Create a new read-cache value with the tx-report
+;;           read-cache2 (cache/with-tx-report read-cache1 tx-report)]
+;;       (cb {:read-cache read-cache2
+;;            :db db-after ;; <-- db2.
+;;            }
+;; This is interesting.
+;; Just need to figure out how we get the tx-data to the cache value.
+
+;; Read invariant:
+;; The old value of the db + the tx-data should be equal to new db (db2).
+;; Check should be enabled to find screw-ups.
