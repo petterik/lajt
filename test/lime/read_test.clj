@@ -119,3 +119,5 @@
                                [{:person/by-any-name [:person/first-name]}])))
         "Petter"
         "Diana"))))
+
+;; Ok, so now that tests have been written, integrate with sulo?

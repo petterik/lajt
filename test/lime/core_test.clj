@@ -773,12 +773,14 @@
     ;; - What about just writing the definition that I'd like for the reads?
     ;;   - Wishful thinking.
     ;;   - Maybe get "chaining reads" in there as well.
+    ;; - Done.
     ;; We need to be able to "chain" reads together (for SULO).
     ;; - Done.
     ;; We need to handle "remote parsing" (with :target).
     ;; - Done.
 
     ;; This is it?
+    ;; Integrate this version of reads with sulo?
 
     (testing "parameters (route-params for example)"
       ;; TODO.
