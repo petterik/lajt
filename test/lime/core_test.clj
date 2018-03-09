@@ -774,7 +774,9 @@
     ;;   - Wishful thinking.
     ;;   - Maybe get "chaining reads" in there as well.
     ;; We need to be able to "chain" reads together (for SULO).
+    ;; - Done.
     ;; We need to handle "remote parsing" (with :target).
+    ;; - Done.
 
     ;; This is it?
 

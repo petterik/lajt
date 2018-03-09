@@ -302,7 +302,7 @@
 
 ;; Deduping query recursively
 (defn dedupe-query
-  "Takes a parser and a query, returns a new query where the reads
+  "Takes a lazy-parser and a query, returns a new query where the reads
   have merged pull patterns."
   [l-parser query]
   (let [reads (atom [])

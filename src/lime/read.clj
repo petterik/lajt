@@ -4,17 +4,18 @@
             [clojure.spec.gen.alpha :as gen]))
 
 (defn- query-params [env {:keys [params] :as read-map}]
-  (cond
-    (map? params)
-    (reduce-kv (fn [m k v]
-                 (assoc m k (reduce (fn [ret f] (f ret)) env v)))
-               {}
-               params)
+  (when (some? params)
+    (cond
+      (map? params)
+      (reduce-kv (fn [m k v]
+                   (assoc m k (reduce (fn [ret f] (f ret)) env v)))
+                 {}
+                 params)
 
-    (fn? params)
-    (params env)
+      (fn? params)
+      (params env)
 
-    :else (throw (ex-info ":params need to be a map or a function." {:read-map read-map}))))
+      :else (throw (ex-info ":params need to be a map or a function." {:read-map read-map})))))
 
 {'[?person ...] [:depends-on ::people]
  ;; Look how easy it is to get the route now.
@@ -22,7 +23,7 @@
  '?email        [:route-param :email]}
 
 (defn- perform-query [env read-map]
-  (let [{:keys [q]} (:db-fns env)
+  (let [{:keys [q]} (::db-fns env)
         q-params (query-params env read-map)
         query (update (:query read-map) :in #(into (vec (or % '[$])) (keys q-params)))]
     (apply q query (:db env) (vals q-params))))
@@ -39,7 +40,7 @@
                          (comparator b a))
                        comparator)
           key-fn (if (and (some? key-fn) entities?)
-                   (let [{:keys [entity]} (:db-fns env)
+                   (let [{:keys [entity]} (::db-fns env)
                          db (:db env)
                          entity* (memoize #(entity db %))]
                      (fn [a]
@@ -86,8 +87,8 @@
 
 (defn perform-pull [env read-map result]
   (let [find-type (find-pattern-type env read-map)
-        pull-fn (get {:scalar     (get-in env [:db-fns :pull])
-                      :collection (get-in env [:db-fns :pull-many])}
+        pull-fn (get {:scalar     (get-in env [::db-fns :pull])
+                      :collection (get-in env [::db-fns :pull-many])}
                      find-type)]
     (if (some? pull-fn)
       (pull-fn (:db env) (:query env) result)
@@ -100,13 +101,16 @@
 (defn perform-read [{::keys [reads read-key] :as env}]
   (let [read-map (reads read-key)
         deps (:depends-on read-map)
+        query (:query env)
         env (reduce (fn [env dep]
                       (if (some? (get-in env [::results dep]))
                         env
                         (perform-read (assoc env ::read-key dep))))
-                    env
+                    ;; TODO: let :depends-on have their own queries?
+                    (dissoc env :query)
                     deps)
-        env (assoc env :depends-on (select-keys (::results env) deps))]
+        env (assoc env :query query
+                       :depends-on (select-keys (::results env) deps))]
     (assoc-in env
               [::results read-key]
               (cond->> (perform-query env read-map)
@@ -139,12 +143,16 @@
                ;; removing symbols mapped to nil values.
                )}
 
-(defn om-next-read [lime-reads]
+(defn om-next-value-wrapper [read]
+  (fn [env k p]
+    {(or (:target env) :value) (read env k p)}))
+
+(defn ->read-fn [lime-reads db-fns]
   (fn [env k p]
     (let [env (assoc env :params p
                          ::read-key k
-                         ::reads lime-reads)]
+                         ::reads lime-reads
+                         ::db-fns db-fns)]
       (if-let [remote (:target env)]
-        (select-keys (lime-reads k) [remote])
-        {:value (-> (perform-read env)
-                    (get-in [::results k]))}))))
+        (get (lime-reads k) remote)
+        (get-in (perform-read env) [::results k])))))
