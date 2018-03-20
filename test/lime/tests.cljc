@@ -5,6 +5,4 @@
     [lime.read-test]))
 
 (defn -main [& args]
-  (clojure.test/run-tests
-    'lime.parser-test
-    'lime.read-test))
+  (clojure.test/run-all-tests #"lime.*"))
