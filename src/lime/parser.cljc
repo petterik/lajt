@@ -215,6 +215,8 @@
 
 ;; Merging queries
 
+(def largest-number #?(:clj Long/MAX_VALUE :cljs js/Number.MAX_SAFE_INTEGER))
+
 (defn- order-keeping-map
   ([] {})
   ([ms]
@@ -223,8 +225,8 @@
                                (distinct)
                                (map-indexed #(vector %2 %1)))
                          ms)]
-     (sorted-map-by #(compare (get key-order %1 Integer/MAX_VALUE)
-                              (get key-order %2 Integer/MAX_VALUE))))))
+     (sorted-map-by #(compare (get key-order %1 largest-number)
+                              (get key-order %2 largest-number))))))
 
 (defn merge-ordered-with [f & ms]
   (let [merge-entry (fn [m e]
