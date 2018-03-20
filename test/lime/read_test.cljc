@@ -93,8 +93,6 @@
     (testing "order"
       (is (= [{:person/first-name "Diana"}
               {:person/first-name "Petter"}]
-             (:people
-               (parser {:db db} [{:people [:person/first-name]}]))
              (:people/order-name-accending
                (parser {:db db} [{:people/order-name-accending [:person/first-name]}]))))
       (is (= [{:person/first-name "Petter"}

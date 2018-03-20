@@ -13,4 +13,9 @@
   nil)
 
 (defn -main [& args]
-  (apply cljs/-main args))
+  (let [opts (map str [
+                       ;;"--verbose" true
+                       "--compile-opts" {:source-map true}])
+        args (vec (concat opts args))]
+    (prn "cljs.main args: " args)
+    (apply cljs/-main args)))
