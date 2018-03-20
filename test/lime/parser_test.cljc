@@ -99,7 +99,7 @@
     '[({:read-key [:a]} {:param 1})
       ({:read-key [:a]} {:param 2})] {[:read-key {:param 1}] {:a nil} [:read-key {:param 2}] {:a nil}})
 
-  (is (thrown-with-msg? Exception #"Unions.*not allowed"
+  (is (thrown-with-msg? #?(:clj Exception :cljs js/Error) #"Unions.*not allowed"
                         (parser/query->pattern-map [{:union {:a [:b]}}])))
 
 

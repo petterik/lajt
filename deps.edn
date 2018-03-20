@@ -4,6 +4,10 @@
   org.clojure/clojurescript {:mvn/version "1.10.191" :scope "provided"}
   datascript     {:mvn/version "0.15.5" :scope "provided"}}
  :aliases
- {:test
+ {:dev
+  {:extra-paths ["env/dev"]}
+  :cljs-repl
+  {:extra-deps {com.bhauman/rebel-readline-cljs {:mvn/version "0.1.1"}}}
+  :test
   {:extra-deps  {org.clojure/test.check {:mvn/version "0.10.0-alpha2"}}
    :extra-paths ["test"]}}}

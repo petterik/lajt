@@ -1,1 +1,1 @@
-clj -R:test -Spom
+clj -R:test:cljs-repl -Spom
