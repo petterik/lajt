@@ -8,7 +8,7 @@
     (cond
       (map? params)
       (reduce-kv (fn [m k v]
-                   (assoc m k (reduce (fn [ret f] (f ret)) env v)))
+                   (assoc m k (reduce #(%2 %1) env v)))
                  {}
                  params)
 
@@ -85,12 +85,13 @@
   (let [[type] (s/conform ::find-pattern (get-in read-map [:query :find]))]
     type))
 
+(def find-type->pull-fn
+  {:scalar :pull
+   :collection :pull-many})
+
 (defn perform-pull [env read-map result]
-  (let [find-type (find-pattern-type env read-map)
-        pull-fn (get {:scalar     (get-in env [::db-fns :pull])
-                      :collection (get-in env [::db-fns :pull-many])}
-                     find-type)]
-    (if (some? pull-fn)
+  (let [find-type (find-pattern-type env read-map)]
+    (if-some [pull-fn (get-in env [::db-fns (find-type->pull-fn find-type)])]
       (pull-fn (:db env) (:query env) result)
       (throw (ex-info (str "WARN: Tried to perform a pull on a query that"
                            " was not of :scalar or :collection find-pattern type.")
