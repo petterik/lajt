@@ -1,6 +1,7 @@
-(ns repl.readline
+(ns lime.main.readline
   (:require
     [rebel-readline.cljs.repl]
+    [lime.dev]
     [cljs.main :as cljs]))
 
 (defn require-lime-tests [repl-opts]
@@ -18,19 +19,8 @@
 
 ;; I even have a main I could use?
 (defn watch-source-files [repl-opts]
-  (let [paths ["src" "test" "env/dev"]]
-    (assoc repl-opts :watch
-                    (reify
-                      cljs.closure/Inputs
-                      (-paths [this]
-                        (mapcat cljs.closure/-paths paths))
-                      cljs.closure/Compilable
-                      (-compile [this opts]
-                        (mapcat #(cljs.closure/-compile % opts)
-                                paths))
-                      (-find-sources [this opts]
-                        (mapcat #(cljs.closure/-find-sources % opts)
-                                paths))))))
+  (assoc repl-opts :watch
+                   (lime.dev/compilable-inputs ["src" "test" "env/dev"])))
 
 (defn print-on-compile [repl-opts]
   (assoc repl-opts :watch-fn (fn [] (prn "BUILT"))))
