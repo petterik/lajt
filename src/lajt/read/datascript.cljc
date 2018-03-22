@@ -1,4 +1,4 @@
-(ns lime.read.datascript
+(ns lajt.read.datascript
   (:require
     [datascript.core :as d]))
 

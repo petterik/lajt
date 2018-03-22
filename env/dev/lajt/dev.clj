@@ -1,4 +1,4 @@
-(ns lime.dev
+(ns lajt.dev
   (:require [cljs.closure]))
 
 (defn compilable-inputs [paths]

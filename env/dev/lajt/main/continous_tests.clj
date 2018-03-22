@@ -1,7 +1,7 @@
-(ns lime.main.continous-tests
-  (:require [lime.dev :as dev]
+(ns lajt.main.continous-tests
+  (:require [lajt.dev :as dev]
             [cljs.main :as cljs]
-            [lime.tests]))
+            [lajt.tests]))
 
 (let [cljs-repl cljs.repl/repl*]
   (alter-var-root
@@ -16,7 +16,7 @@
 (defn -main [& _]
   (let [opts (mapv str ["--verbose" true
                         "--repl-env" "node"
-                        "--compile-opts" {:watch-fn 'lime.tests/-main}
+                        "--compile-opts" {:watch-fn 'lajt.tests/-main}
                         "--watch" "test"
                         "-c"])]
     (prn "cljs.main args: " opts)

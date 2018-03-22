@@ -1,11 +1,11 @@
-(ns lime.main.readline
+(ns lajt.main.readline
   (:require
     [rebel-readline.cljs.repl]
-    [lime.dev]
+    [lajt.dev]
     [cljs.main :as cljs]))
 
-(defn require-lime-tests [repl-opts]
-  (update repl-opts :repl-requires (fnil conj []) '[lime.tests]))
+(defn require-lajt-tests [repl-opts]
+  (update repl-opts :repl-requires (fnil conj []) '[lajt.tests]))
 
 ;; TODO
 ;; Change detected, recompiling ...
@@ -20,7 +20,7 @@
 ;; I even have a main I could use?
 (defn watch-source-files [repl-opts]
   (assoc repl-opts :watch
-                   (lime.dev/compilable-inputs ["src" "test" "env/dev"])))
+                   (lajt.dev/compilable-inputs ["src" "test" "env/dev"])))
 
 (defn print-on-compile [repl-opts]
   (assoc repl-opts :watch-fn (fn [] (prn "BUILT"))))
@@ -35,7 +35,7 @@
           (rebel-readline.cljs.repl/repl*
             env
             (-> opts
-                (require-lime-tests)
+                (require-lajt-tests)
                 #_(watch-source-files)
                 #_(print-on-compile)))))))
   nil)
@@ -43,7 +43,7 @@
 (defn -main [& _]
   (let [opts (map str [
                        "--verbose" true
-                       "--compile-opts" {:main 'lime.tests
+                       "--compile-opts" {:main 'lajt.tests
                                          :source-map true}
                        "--repl-env" "node"
                        "-r"])]

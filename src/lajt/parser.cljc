@@ -1,4 +1,4 @@
-(ns lime.parser
+(ns lajt.parser
   (:require [clojure.spec.alpha :as s]))
 
 ;; TODO: Support idents?

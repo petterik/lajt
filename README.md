@@ -1,4 +1,4 @@
-# lime (or lajt, not sure yet).
+# lajt
 
 Declarative datascript UI with om.next like libraries.
 

@@ -1,3 +1,3 @@
 #!/bin/bash
 
-clj -A:test --main lime.tests
+clj -A:test --main lajt.tests

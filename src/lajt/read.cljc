@@ -1,4 +1,4 @@
-(ns lime.read
+(ns lajt.read
   (:require [clojure.spec.alpha :as s]
             [clojure.string :as str]
             [clojure.spec.gen.alpha :as gen]))
@@ -148,12 +148,12 @@
   (fn [env k p]
     {(or (:target env) :value) (read env k p)}))
 
-(defn ->read-fn [lime-reads db-fns]
+(defn ->read-fn [lajt-reads db-fns]
   (fn [env k p]
     (let [env (assoc env :params p
                          ::read-key k
-                         ::reads lime-reads
+                         ::reads lajt-reads
                          ::db-fns db-fns)]
       (if-let [remote (:target env)]
-        (get (lime-reads k) remote)
+        (get (lajt-reads k) remote)
         (get-in (perform-read env) [::results k])))))

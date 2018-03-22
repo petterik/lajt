@@ -1,12 +1,12 @@
-(ns lime.core-test
+(ns lajt.core-test
   (:require [clojure.test :refer [deftest is testing]]
             [clojure.spec.alpha :as s]
             [clojure.spec.gen.alpha :as gen]
             [clojure.spec.test.alpha :as st]
             [clojure.test.check.properties :as prop]
             [clojure.test.check.clojure-test :refer [defspec]]
-            [lime.core :refer :all]
-            [lime.parser :as parser]
+            [lajt.core :refer :all]
+            [lajt.parser :as parser]
             [datascript.core :as d]
             [datascript.db]
             [clojure.string :as str]))

@@ -1,7 +1,7 @@
-(ns lime.parser-test
+(ns lajt.parser-test
   (:require
     [clojure.test :as t :refer [deftest is are testing]]
-    [lime.parser :as parser]
+    [lajt.parser :as parser]
     [clojure.spec.alpha :as s]
     [clojure.spec.test.alpha :as st]
     [clojure.spec.gen.alpha :as gen]))

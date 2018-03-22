@@ -1,9 +1,9 @@
-(ns lime.read-test
+(ns lajt.read-test
   (:require
     [clojure.test :refer [deftest is are testing]]
-    [lime.read :as read]
-    [lime.read.datascript]
-    [lime.parser :as parser]
+    [lajt.read :as read]
+    [lajt.read.datascript]
+    [lajt.parser :as parser]
     [datascript.core :as d]))
 
 ;; Ok cool. Reads implemented.
@@ -65,7 +65,7 @@
                (d/db)
                (d/db-with [{:person/first-name "Petter"}
                            {:person/first-name "Diana"}]))
-        parser (parser/parser {:read (read/->read-fn reads (lime.read.datascript/db-fns))})]
+        parser (parser/parser {:read (read/->read-fn reads (lajt.read.datascript/db-fns))})]
     (is (= #{{:person/first-name "Petter"}
              {:person/first-name "Diana"}}
            (set
