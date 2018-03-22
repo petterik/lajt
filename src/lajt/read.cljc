@@ -22,11 +22,12 @@
  '?route        [:route]
  '?email        [:route-param :email]}
 
-(defn- perform-query [env read-map]
-  (let [{:keys [q]} (::db-fns env)
-        q-params (query-params env read-map)
-        query (update (:query read-map) :in #(into (vec (or % '[$])) (keys q-params)))]
-    (apply q query (:db env) (vals q-params))))
+(defn- perform-query [{:keys [db] :as env} read-map]
+  (if-let [ref (:lookup-ref read-map)]
+    ((get-in env [::db-fns :entid]) db ref)
+    (let [q-params (query-params env read-map)
+          query (update (:query read-map) :in #(into (vec (or % '[$])) (keys q-params)))]
+      (apply (get-in env [::db-fns :q]) query db (vals q-params)))))
 
 (defn- sort-result [env read-map result]
   (if-not (coll? result)
@@ -82,8 +83,11 @@
                                                         :dots '#{...}))))
 
 (defn find-pattern-type [env read-map]
-  (let [[type] (s/conform ::find-pattern (get-in read-map [:query :find]))]
-    type))
+  (if (some? (:lookup-ref read-map))
+    :scalar
+    (let [[type] (s/conform ::find-pattern
+                            (get-in read-map [:query :find]))]
+     type)))
 
 (def find-type->pull-fn
   {:scalar :pull
@@ -101,8 +105,13 @@
 
 (defn perform-read [{::keys [reads read-key] :as env}]
   (let [read-map (reads read-key)
-        deps (:depends-on read-map)
         query (:query env)
+        _ (when (nil? read-map)
+            (throw (ex-info (str "No such read: " read-key)
+                            {:read-key read-key
+                             :query    query})))
+
+        deps (:depends-on read-map)
         env (reduce (fn [env dep]
                       (if (some? (get-in env [::results dep]))
                         env
@@ -112,6 +121,14 @@
                     deps)
         env (assoc env :query query
                        :depends-on (select-keys (::results env) deps))]
+    (when (every? some? (map read-map [:lookup-ref :query]))
+      (throw (ex-info (str "Cannot have both :lookup-ref and :query"
+                           " in the read's map.")
+                      {:read-key read-key
+                       :read-map read-map
+                       :query query})))
+    (when-let [f (:before read-map)]
+      (f env))
     (assoc-in env
               [::results read-key]
               (cond->> (perform-query env read-map)

@@ -6,4 +6,5 @@
   {:q         d/q
    :entity    d/entity
    :pull      d/pull
-   :pull-many d/pull-many})
+   :pull-many d/pull-many
+   :entid     d/entid})

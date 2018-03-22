@@ -18,3 +18,7 @@ pom.xml.asc
 /.cpcache
 /.repl-*
 /out/
+
+## mvn
+
+/settings.xml
