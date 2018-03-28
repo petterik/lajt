@@ -3,7 +3,8 @@
  :deps
  {org.clojure/clojure       {:mvn/version "1.10.0-alpha4" :scope "provided"}
   org.clojure/clojurescript {:mvn/version "1.10.217" :scope "provided"}
-  datascript                {:mvn/version "0.15.5" :scope "provided"}}
+  datascript                {:mvn/version "0.16.4" :scope "provided"}
+  medley                    {:mvn/version "1.0.0"}}
  :aliases
  {:dev
   {:extra-paths ["env/dev"]}
