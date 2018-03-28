@@ -1,32 +1,18 @@
 (ns lajt.read
-  (:require [clojure.spec.alpha :as s]
-            [clojure.string :as str]
-            [clojure.spec.gen.alpha :as gen]
-            #?(:clj [clojure.data])))
+  (:require
+    [clojure.spec.alpha :as s]
+    [clojure.string :as str]
+    [clojure.spec.gen.alpha :as gen]
+    [medley.core :as m]
+    #?(:clj
+    [clojure.data])))
+
+(def ^:dynamic *debug*)
 
 (def default-ops
-  {:pre     [:depends-on :before]
+  {:pre     [:depends-on :params :before]
    :actions [:query :lookup-ref]
    :post    [:sort ::pull]})
-
-(defn- query-params [env read-map]
-  (when-some [params (or (:params read-map)
-                         ;; Allow for params to be defined
-                         ;; in the query map.
-                         ;; Actually, I think this is the only
-                         ;; thing that should be allowed.
-                         (get-in read-map [:query :params]))]
-    (cond
-      (map? params)
-      (reduce-kv (fn [m k v]
-                   (assoc m k (reduce #(%2 %1) env v)))
-                 {}
-                 params)
-
-      (fn? params)
-      (params env)
-
-      :else (throw (ex-info ":params need to be a map or a function." {:read-map read-map})))))
 
 {'[?person ...] [:depends-on ::people]
  ;; Look how easy it is to get the route now.
@@ -84,10 +70,10 @@
                          :env        env}))))
 
 (defmulti call-read-op (fn [env k v] k) :default ::default)
-(defn call-op [{:keys [debug] :as env} k v]
+(defn call-op [env k v]
   (let [env' (call-read-op env k v)]
     #?(:clj
-       (when debug
+       (when *debug*
          (let [[before after] (clojure.data/diff env env')]
            (prn {:op     k
                  :before before
@@ -112,22 +98,50 @@
   (call-fns v env)
   env)
 
+(defn- assoc-scoped [env k v]
+  (assoc-in env [k (::read-key env)] v))
+
+(defn- get-scoped [env k]
+  (get-in env [k (::read-key env)]))
+
 (defn- add-result
   "Adds a result to env. Convenicence function for actions."
   [env res]
-  (assoc-in env [::result (::read-key env)] res))
+  (assoc-scoped env ::result res))
 
 (defn- get-result
   [env]
-  (get-in env [::result (::read-key env)]))
+  (get-scoped env ::result))
+
+(defmethod call-read-op :params
+  [env _ params]
+  (assoc-scoped env ::params
+                (when (some? params)
+                  (cond
+                    (map? params)
+                    (m/map-vals #(call-fns % env) params)
+
+                    (fn? params)
+                    (params env)
+                    :else
+                    (throw
+                      (ex-info
+                        ":params need to be a map or a function."
+                        {:params params}))))))
 
 (defmethod call-read-op :query
-  [{::keys [read-map] :as env} _ query]
-  (let [q-params (query-params env read-map)
-        query (update query :in #(into (vec (or % '[$]))
-                                       (keys q-params)))
+  [env k query]
+  (let [q-params (get-scoped env ::params)
+        query (-> (dissoc query :params)
+                  (update :in #(into (vec (or % '[$]))
+                                     (keys q-params))))
         res (apply (get-in env [::db-fns :q]) query (:db env)
                    (vals q-params))]
+    #_(when *debug*
+        (prn {:op     k
+              :result res
+              :query  query
+              :params q-params}))
     (add-result env res)))
 
 (defmethod call-read-op :lookup-ref
@@ -252,13 +266,14 @@
 
 (defn ->read-fn [lajt-reads db-fns]
   (fn [env k p]
-    (let [env (assoc env :params p
-                         ::read-key k
-                         ::reads lajt-reads
-                         ::db-fns db-fns
-                         ::read-ops (:read-ops env default-ops))]
-      (if-let [remote (:target env)]
-        (get (lajt-reads k) remote)
-        (get-result (perform-read env))))))
+    (binding [*debug* (:debug env false)]
+      (let [env (assoc env :params p
+                           ::read-key k
+                           ::reads lajt-reads
+                           ::db-fns db-fns
+                           ::read-ops (:read-ops env default-ops))]
+        (if-let [remote (:target env)]
+          (get (lajt-reads k) remote)
+          (get-result (perform-read env)))))))
 
 

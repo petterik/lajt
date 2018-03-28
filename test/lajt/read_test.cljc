@@ -19,8 +19,8 @@
    {:query '{:find  [[?e ...]]
              :where [[?e :person/first-name]]}}
    :person/by-name
-   {:query  '{:find  [?e .]
-              :where [[?e :person/first-name ?name]]}
+   {:query '{:find   [?e .]
+             :where  [[?e :person/first-name ?name]]}
     :params {'?name [:route-params :name]}}
    :people/names
    {:query '{:find  [[?name ...]]
@@ -52,14 +52,14 @@
 
    ;; Depending on other queries
    :names/any-name
-   {:query  '{:find  [?name .]
-              :where [[_ :person/first-name ?name]]}
+   {:query '{:find   [?name .]
+             :where  [[_ :person/first-name ?name]]}
     :params {'?name [:route-params :name]}}
    :person/by-any-name
-   {:query      '{:find  [?e .]
-                  :where [[?e :person/first-name ?name]]}
-    :depends-on [:names/any-name]
-    :params     {'?name [:depends-on :names/any-name]}}
+   {:query      '{:find   [?e .]
+                  :where  [[?e :person/first-name ?name]]}
+    :params {'?name [:depends-on :names/any-name]}
+    :depends-on [:names/any-name]}
 
    ;; Doing something before query
    :case/before-fn
@@ -85,18 +85,19 @@
       (d/db-with [{:person/first-name "Petter"}
                   {:person/first-name "Diana"}])))
 
+(defn debug-parser [p]
+  (fn
+    ([] (p))
+    ([env query]
+     (p (assoc env :debug true) query))))
+
 (defn- ->parser []
   (parser/parser {:read (read/->read-fn reads (lajt.read.datascript/db-fns))}))
 
 (comment
   (do
     (def db (->db))
-    (def parser
-      (let [p (->parser)]
-        (fn
-          ([] (p))
-          ([env query]
-           (p (assoc env :debug true) query))))))
+    (def parser (debug-parser (->parser))))
 
   (is (= #{{:person/first-name "Petter"}
            {:person/first-name "Diana"}}
