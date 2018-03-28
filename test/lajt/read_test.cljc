@@ -1,6 +1,6 @@
 (ns lajt.read-test
   (:require
-    [clojure.test :refer [deftest is are testing]]
+    [clojure.test :as t :refer [deftest is are testing]]
     [lajt.read :as read]
     [lajt.read.datascript]
     [lajt.parser :as parser]
@@ -14,68 +14,70 @@
 ;; It'd be nice to have a test with om.next to run via the new cljs.main stuff?
 ;; Something that
 
-(def reads {:people
-            {:query '{:find  [[?e ...]]
-                      :where [[?e :person/first-name]]}}
-            :person/by-name
-            {:query  '{:find  [?e .]
-                       :where [[?e :person/first-name ?name]]}
-             :params {'?name [:route-params :name]}}
-            :people/names
-            {:query '{:find  [[?name ...]]
-                      :where [[_ :person/first-name ?name]]}}
+(def reads
+  {:people
+   {:query '{:find  [[?e ...]]
+             :where [[?e :person/first-name]]}}
+   :person/by-name
+   {:query  '{:find  [?e .]
+              :where [[?e :person/first-name ?name]]}
+    :params {'?name [:route-params :name]}}
+   :people/names
+   {:query '{:find  [[?name ...]]
+             :where [[_ :person/first-name ?name]]}}
 
-            ;; Order by names
-            :people/names-decending
-            {:query '{:find  [[?name ...]]
-                      :where [[_ :person/first-name ?name]]}
-             :sort  {:order :decending}}
-            :people/order-name-accending
-            {:query '{:find  [[?e ...]]
-                      :where [[?e :person/first-name]]}
-             :sort  {:key-fn :person/first-name}}
-            :people/order-name-decending
-            {:query '{:find  [[?e ...]]
-                      :where [[?e :person/first-name]]}
-             :sort  {:key-fn :person/first-name
-                     :order  :decending}}
-            ;; Order by eid
-            :people/order-eid-accending
-            {:query '{:find  [[?e ...]]
-                      :where [[?e :person/first-name]]}
-             :sort  {}}
-            :people/order-eid-decending
-            {:query '{:find  [[?e ...]]
-                      :where [[?e :person/first-name]]}
-             :sort  {:order :decending}}
+   ;; Order by names
+   :people/names-decending
+   {:query '{:find  [[?name ...]]
+             :where [[_ :person/first-name ?name]]}
+    :sort  {:order :decending}}
+   :people/order-name-accending
+   {:query '{:find  [[?e ...]]
+             :where [[?e :person/first-name]]}
+    :sort  {:key-fn :person/first-name}}
+   :people/order-name-decending
+   {:query '{:find  [[?e ...]]
+             :where [[?e :person/first-name]]}
+    :sort  {:key-fn :person/first-name
+            :order  :decending}}
+   ;; Order by eid
+   :people/order-eid-accending
+   {:query '{:find  [[?e ...]]
+             :where [[?e :person/first-name]]}
+    :sort  {}}
+   :people/order-eid-decending
+   {:query '{:find  [[?e ...]]
+             :where [[?e :person/first-name]]}
+    :sort  {:order :decending}}
 
-            ;; Depending on other queries
-            :names/any-name
-            {:query  '{:find  [?name .]
-                       :where [[_ :person/first-name ?name]]}
-             :params {'?name [:route-params :name]}}
-            :person/by-any-name
-            {:query      '{:find  [?e .]
-                           :where [[?e :person/first-name ?name]]}
-             :depends-on [:names/any-name]
-             :params     {'?name [:depends-on :names/any-name]}}
+   ;; Depending on other queries
+   :names/any-name
+   {:query  '{:find  [?name .]
+              :where [[_ :person/first-name ?name]]}
+    :params {'?name [:route-params :name]}}
+   :person/by-any-name
+   {:query      '{:find  [?e .]
+                  :where [[?e :person/first-name ?name]]}
+    :depends-on [:names/any-name]
+    :params     {'?name [:depends-on :names/any-name]}}
 
-            ;; Doing something before query
-            :case/before-fn
-            {:before (fn [env]
-                       (swap! (:atom env) inc))
-             :query  '{:find  [?e .]
-                       :where [[?e :person/first-name]]}}
-            ;; Lookup ref instead of query
-            :lookup/petter
-            {:lookup-ref [:person/first-name "Petter"]}
-            :lookup/diana
-            {:lookup-ref [:person/first-name "Diana"]}
-            ;; Cannot have both lookup ref and query
-            :crash/lookup+query
-            {:lookup-ref [:person/first-name "Petter"]
-             :query '{:find  [?e .]
-                      :where [[?e :person/first-name]]}}})
+   ;; Doing something before query
+   :case/before-fn
+   {:before (fn [env]
+              (swap! (:atom env) inc))
+    :query  '{:find  [?e .]
+              :where [[?e :person/first-name]]}}
+   ;; Lookup ref instead of query
+   :lookup/petter
+   {:lookup-ref [:person/first-name "Petter"]}
+   :lookup/diana
+   {:lookup-ref [:person/first-name "Diana"]}
+   ;; Cannot have both lookup ref and query
+   :crash/lookup+query
+   {:lookup-ref [:person/first-name "Petter"]
+    :query      '{:find  [?e .]
+                  :where [[?e :person/first-name]]}}
+   })
 
 (defn- ->db []
   (-> (d/create-conn {:person/first-name {:db/unique :db.unique/identity}})
@@ -85,6 +87,24 @@
 
 (defn- ->parser []
   (parser/parser {:read (read/->read-fn reads (lajt.read.datascript/db-fns))}))
+
+(comment
+  (do
+    (def db (->db))
+    (def parser
+      (let [p (->parser)]
+        (fn
+          ([] (p))
+          ([env query]
+           (p (assoc env :debug true) query))))))
+
+  (is (= #{{:person/first-name "Petter"}
+           {:person/first-name "Diana"}}
+         (set
+           (:people
+             (parser {:db db}
+                     [{:people [:person/first-name]}])))))
+  )
 
 (deftest read-test
   (let [db (->db)

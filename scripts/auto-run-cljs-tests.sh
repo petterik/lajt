@@ -1,3 +1,3 @@
 #!/bin/bash
 
-clj -A:dev:test:cljs-repl:fikes/watch-fn-fix -m lajt.main.continous-tests
+clj -A:dev:test:cljs-repl:cljs/dev -m lajt.main.continous-tests

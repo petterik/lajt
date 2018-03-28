@@ -77,7 +77,9 @@
 
 (defmethod parse :id
   [env [_ k :as expr]]
-  (dispatch env k expr))
+  (dispatch (assoc env :query nil)
+            k
+            expr))
 
 (defmethod parse :join
   [env [_ m :as expr]]

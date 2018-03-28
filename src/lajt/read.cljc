@@ -1,10 +1,21 @@
 (ns lajt.read
   (:require [clojure.spec.alpha :as s]
             [clojure.string :as str]
-            [clojure.spec.gen.alpha :as gen]))
+            [clojure.spec.gen.alpha :as gen]
+            #?(:clj [clojure.data])))
 
-(defn- query-params [env {:keys [params] :as read-map}]
-  (when (some? params)
+(def default-ops
+  {:pre     [:depends-on :before]
+   :actions [:query :lookup-ref]
+   :post    [:sort ::pull]})
+
+(defn- query-params [env read-map]
+  (when-some [params (or (:params read-map)
+                         ;; Allow for params to be defined
+                         ;; in the query map.
+                         ;; Actually, I think this is the only
+                         ;; thing that should be allowed.
+                         (get-in read-map [:query :params]))]
     (cond
       (map? params)
       (reduce-kv (fn [m k v]
@@ -21,35 +32,6 @@
  ;; Look how easy it is to get the route now.
  '?route        [:route]
  '?email        [:route-param :email]}
-
-(defn- perform-query [{:keys [db] :as env} read-map]
-  (if-let [ref (:lookup-ref read-map)]
-    ((get-in env [::db-fns :entid]) db ref)
-    (let [q-params (query-params env read-map)
-          query (update (:query read-map) :in #(into (vec (or % '[$])) (keys q-params)))]
-      (apply (get-in env [::db-fns :q]) query db (vals q-params)))))
-
-(defn- sort-result [env read-map result]
-  (if-not (coll? result)
-    [result]
-    (let [{:keys [comparator key-fn order entities?]
-           :or {entities? true
-                comparator compare}} (:sort read-map)
-
-          comparator (if (= :decending order)
-                       (fn [a b]
-                         (comparator b a))
-                       comparator)
-          key-fn (if (and (some? key-fn) entities?)
-                   (let [{:keys [entity]} (::db-fns env)
-                         db (:db env)
-                         entity* (memoize #(entity db %))]
-                     (fn [a]
-                       (key-fn (entity* a))))
-                   key-fn)]
-      (if (some? key-fn)
-        (sort-by key-fn comparator result)
-        (sort comparator result)))))
 
 (comment
   :sort-map
@@ -93,49 +75,152 @@
   {:scalar :pull
    :collection :pull-many})
 
-(defn perform-pull [env read-map result]
-  (let [find-type (find-pattern-type env read-map)]
-    (if-some [pull-fn (get-in env [::db-fns (find-type->pull-fn find-type)])]
-      (pull-fn (:db env) (:query env) result)
+(defn call-fns [x env]
+  (cond (fn? x) (x env)
+        (vector? x) (reduce #(%2 %1) env x)
+        :else
+        (throw (ex-info "Unknown call chain: " x
+                        {:call-chain x
+                         :env        env}))))
+
+(defmulti call-read-op (fn [env k v] k) :default ::default)
+(defn call-op [{:keys [debug] :as env} k v]
+  (let [env' (call-read-op env k v)]
+    #?(:clj
+       (when debug
+         (let [[before after] (clojure.data/diff env env')]
+           (prn {:op     k
+                 :before before
+                 :after  after}))))
+    env'))
+
+(defmethod call-read-op ::default
+  [env k v]
+  (throw (ex-info (str "No read-op for key: " k)
+                  {:key k :value v :query (:query env)})))
+
+(defmethod call-read-op :depends-on
+  [env _ v]
+  (let [res ((:parser env) env v)
+        env (update env ::results merge res)]
+    ;; Assoc the :depends-on key with all results
+    ;; such reads can access it easily.
+    (assoc env :depends-on (::results env))))
+
+(defmethod call-read-op :before
+  [env _ v]
+  (call-fns v env)
+  env)
+
+(defn- add-result
+  "Adds a result to env. Convenicence function for actions."
+  [env res]
+  (assoc-in env [::result (::read-key env)] res))
+
+(defn- get-result
+  [env]
+  (get-in env [::result (::read-key env)]))
+
+(defmethod call-read-op :query
+  [{::keys [read-map] :as env} _ query]
+  (let [q-params (query-params env read-map)
+        query (update query :in #(into (vec (or % '[$]))
+                                       (keys q-params)))
+        res (apply (get-in env [::db-fns :q]) query (:db env)
+                   (vals q-params))]
+    (add-result env res)))
+
+(defmethod call-read-op :lookup-ref
+  [env _ ref]
+  (add-result env ((get-in env [::db-fns :entid]) (:db env) ref)))
+
+(defmethod call-read-op :sort
+  [env _ sort-map]
+  (let [result (get-result env)
+        ret (if (or (map? result) (not (coll? result)))
+              [result]
+              (let [{:keys [comparator key-fn order entities?]
+                     :or   {entities?  true
+                            comparator compare}} sort-map
+                    comparator (if (= :decending order)
+                                 (fn [a b]
+                                   (comparator b a))
+                                 comparator)
+                    key-fn (if (and (some? key-fn) entities?)
+                             (let [{:keys [entity]} (::db-fns env)
+                                   db (:db env)
+                                   entity* (memoize #(entity db %))]
+                               (fn [a]
+                                 (key-fn (entity* a))))
+                             key-fn)]
+                (if (some? key-fn)
+                  (sort-by key-fn comparator result)
+                  (sort comparator result))))]
+    (add-result env ret)))
+
+(defmethod call-read-op ::pull
+  [{::keys [read-map] :as env} _ query]
+  (let [find-type (find-pattern-type env read-map)
+        result (get-result env)
+        pull-fn (get-in env [::db-fns (find-type->pull-fn find-type)])]
+    (when (nil? pull-fn)
       (throw (ex-info (str "WARN: Tried to perform a pull on a query that"
                            " was not of :scalar or :collection find-pattern type.")
                       {:read-map  read-map
-                       :query     (:query env)
-                       :find-type find-type})))))
+                       :query     query
+                       :find-type find-type})))
+    (add-result env (pull-fn (:db env) query result))))
 
-(defn perform-read [{::keys [reads read-key] :as env}]
-  (let [read-map (reads read-key)
-        query (:query env)
-        _ (when (nil? read-map)
-            (throw (ex-info (str "No such read: " read-key)
-                            {:read-key read-key
-                             :query    query})))
-
-        deps (:depends-on read-map)
-        env (reduce (fn [env dep]
-                      (if (some? (get-in env [::results dep]))
-                        env
-                        (perform-read (assoc env ::read-key dep))))
-                    ;; TODO: let :depends-on have their own queries?
-                    (dissoc env :query)
-                    deps)
-        env (assoc env :query query
-                       :depends-on (select-keys (::results env) deps))]
-    (when (every? some? (map read-map [:lookup-ref :query]))
-      (throw (ex-info (str "Cannot have both :lookup-ref and :query"
-                           " in the read's map.")
+(defn- validate-read! [{::keys [reads read-key] :as env}]
+  (let [read-map (reads read-key)]
+    (when (nil? read-map)
+      (throw (ex-info (str "No such read: " read-key)
                       {:read-key read-key
-                       :read-map read-map
-                       :query query})))
-    (when-let [f (:before read-map)]
-      (f env))
-    (assoc-in env
-              [::results read-key]
-              (cond->> (perform-query env read-map)
-                       (some? (:sort read-map))
-                       (sort-result env read-map)
-                       (not-empty (:query env))
-                       (perform-pull env read-map)))))
+                       :query    (:query env)})))))
+
+(defn- get-action [{::keys [read-map read-key read-ops] :as env}]
+  (let [actions (filterv (set (:actions read-ops)) (keys read-map))]
+    (if (== 1 (count actions))
+      (first actions)
+      (throw
+        (ex-info
+          (if (zero? (count actions))
+            (str "read-map did not contain any of the actions."
+                 " It must contain one of: "
+                 (:actions read-ops))
+            (str "Cannot have multiple actions"
+                 " in the read's map. Had actions: "
+                 actions))
+          {:actions  (:actions read-ops)
+           :read-key read-key
+           :read-map read-map
+           :query    (:query env)})))))
+
+(defn- perform-ops [env ops]
+  (reduce (fn [{::keys [read-map] :as env} read-op]
+            (cond-> env
+                    (contains? read-map read-op)
+                    (call-op read-op
+                             (get read-map read-op))))
+          env
+          ops))
+
+(defn perform-read [{::keys [reads read-key read-ops] :as env}]
+  (validate-read! env)
+  (let [
+        ;; Adds read-map with an additional ::pull action
+        ;; whenever there's a query.
+        env (cond-> (assoc env ::read-map (reads read-key))
+                    (not-empty (:query env))
+                    (assoc-in [::read-map ::pull] (:query env)))
+        ;; Performs the :pre ops
+        env (perform-ops env (:pre read-ops))
+        ;; Call an :action
+        action (get-action env)
+        env (call-op env action (get-in env [::read-map action]))
+        ;; Call :post ops
+        env (perform-ops env (:post read-ops))]
+    env))
 
 {:query      '{:find  [?e .]
                :where [[?e :address/email ?email]
@@ -170,7 +255,10 @@
     (let [env (assoc env :params p
                          ::read-key k
                          ::reads lajt-reads
-                         ::db-fns db-fns)]
+                         ::db-fns db-fns
+                         ::read-ops (:read-ops env default-ops))]
       (if-let [remote (:target env)]
         (get (lajt-reads k) remote)
-        (get-in (perform-read env) [::results k])))))
+        (get-result (perform-read env))))))
+
+

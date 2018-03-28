@@ -3,7 +3,7 @@
             [cljs.main :as cljs]
             [lajt.tests]))
 
-(let [cljs-repl cljs.repl/repl*]
+#_(let [cljs-repl cljs.repl/repl*]
   (alter-var-root
     #'cljs.repl/repl*
     (fn [_]
@@ -16,8 +16,10 @@
 (defn -main [& _]
   (let [opts (mapv str ["--verbose" true
                         "--repl-env" "node"
-                        "--compile-opts" {:watch-fn 'lajt.tests/-main}
-                        "--watch" "test"
+                        "--repl-opts" {:main 'lajt.tests}
+                        "--compile-opts" {:main 'lajt.tests
+                                          :watch-fn 'lajt.tests/-main}
+                        "--watch" "src:test:env/dev"
                         "-c"])]
     (prn "cljs.main args: " opts)
     (apply cljs/-main opts)))

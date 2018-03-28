@@ -9,7 +9,8 @@
   {:extra-paths ["env/dev"]}
   :test
   {:extra-paths ["test"]
-   :extra-deps {org.clojure/test.check {:mvn/version "0.10.0-alpha2"}}}
+   :extra-deps {org.clojure/test.check {:mvn/version "0.10.0-alpha2"}
+                com.clojure-goes-fast/clj-memory-meter {:mvn/version "0.1.0"}}}
   :cljs-repl
   {:extra-deps {com.bhauman/rebel-readline-cljs {:mvn/version "0.1.1"}}}
   ;; Temp aliases
