@@ -44,143 +44,82 @@
 
 (t/use-fixtures :each setup)
 
-(defn do-read
+(defn read-query
   ([read]
-   (do-read read nil))
+   (read-query read nil))
   ([read {:keys [pull] :as env}]
    (let [key ::test-read-key
-         query (if (some? pull)
-                 [{key pull}]
-                 [key])
-         result (*parser* (merge {:db    *db*
-                                  :reads {key read}}
-                                 (dissoc env :pull))
-                          query)]
+         result (*parser*
+                  (merge {:db    *db*
+                          :reads {key read}}
+                         (dissoc env :pull))
+                  (if (some? pull)
+                    [{key pull}]
+                    [key]))]
      (get result key))))
 
 (deftest simple-reads
-  (let [reads
-        {:people
-         {:query '{:find  [[?e ...]]
-                   :where [[?e :person/first-name]]}}
-         :person/by-name
-         {:query  '{:find  [?e .]
-                    :where [[?e :person/first-name ?name]]}
-          :params {'?name [:route-params :name]}}}]
+  (let [person-by-name
+        {:query  '{:find  [?e .]
+                   :where [[?e :person/first-name ?name]]}
+         :params {'?name [:route-params :name]}}]
     (testing "reads with pull pattern"
       (is (= #{{:person/first-name "Petter"}
                {:person/first-name "Diana"}}
-             (set
-               (:people
-                 (*parser* {:db *db* :reads reads}
-                           [{:people [:person/first-name]}])))
-             (set
-               (do-read
-                 {:query '{:find  [[?e ...]]
-                           :where [[?e :person/first-name]]}}
-                 {:pull [:person/first-name]}))))
+             (set (read-query
+                    {:query '{:find  [[?e ...]]
+                              :where [[?e :person/first-name]]}}
+                    {:pull [:person/first-name]}))))
       (is (= {:person/first-name "Petter"}
-             (:person/by-name
-               (*parser* {:db           *db*
-                          :reads        reads
-                          :route-params {:name "Petter"}}
-                         [{:person/by-name [:person/first-name]}]))
-             (do-read
-               (:person/by-name reads)
+             (read-query
+               person-by-name
                {:pull [:person/first-name]
                 :route-params {:name "Petter"}}))))
 
     (testing "read without query returns whatever the query returned."
       (is (= (d/entid *db* [:person/first-name "Petter"])
-             (:person/by-name
-               (*parser* {:db *db*
-                          :reads reads
-                          :route-params {:name "Petter"}}
-                         [:person/by-name]))
-             (do-read (:person/by-name reads)
-                      {:route-params {:name "Petter"}})))
-      (let [reads
-            {:people/names
-             {:query '{:find  [[?name ...]]
-                       :where [[_ :person/first-name ?name]]}}
-             :people/names-decending
-             {:query '{:find  [[?name ...]]
-                       :where [[_ :person/first-name ?name]]}
-              :sort  {:order :decending}}}]
-
-        (is (= #{"Petter" "Diana"}
-               (set
-                 (:people/names
-                   (*parser* {:db *db* :reads reads} [:people/names])))
-               (set
-                 (do-read {:query '{:find  [[?name ...]]
-                                    :where [[_ :person/first-name ?name]]}}))))
-        (is (= ["Petter" "Diana"]
-               (:people/names-decending
-                 (*parser* {:db *db* :reads reads}
-                           [:people/names-decending]))
-               (do-read {:query '{:find  [[?name ...]]
-                                  :where [[_ :person/first-name ?name]]}
-                         :sort  {:order :decending}})))))))
+             (read-query person-by-name
+                         {:route-params {:name "Petter"}})))
+      (is (= #{"Petter" "Diana"}
+             (set
+               (read-query
+                 {:query '{:find  [[?name ...]]
+                           :where [[_ :person/first-name ?name]]}}))))
+      (is (= ["Petter" "Diana"]
+             (read-query
+               {:query '{:find  [[?name ...]]
+                         :where [[_ :person/first-name ?name]]}
+                :sort  {:order :decending}}))))))
 
 (deftest reads-with-order
-  (let [reads
-        {:people/order-name-accending
-         {:query '{:find  [[?e ...]]
-                   :where [[?e :person/first-name]]}
-          :sort  {:key-fn :person/first-name}}
-         :people/order-name-decending
-         {:query '{:find  [[?e ...]]
-                   :where [[?e :person/first-name]]}
-          :sort  {:key-fn :person/first-name
-                  :order  :decending}}}]
-    (testing ":order with query"
-      (is (= [{:person/first-name "Diana"}
-              {:person/first-name "Petter"}]
-             (:people/order-name-accending
-               (*parser* {:db *db* :reads reads}
-                         [{:people/order-name-accending
-                           [:person/first-name]}]))
-             (do-read {:query '{:find  [[?e ...]]
-                                :where [[?e :person/first-name]]}
-                       :sort  {:key-fn :person/first-name}}
-                      {:pull [:person/first-name]})
-             ))
-      (is (= [{:person/first-name "Petter"}
-              {:person/first-name "Diana"}]
-             (:people/order-name-decending
-               (*parser* {:db *db* :reads reads}
-                         [{:people/order-name-decending
-                           [:person/first-name]}]))
-             (do-read {:query '{:find  [[?e ...]]
-                                :where [[?e :person/first-name]]}
-                       :sort  {:key-fn :person/first-name
-                               :order  :decending}}
-                      {:pull [:person/first-name]}))))
+  (testing ":order with query"
+    (is (= [{:person/first-name "Diana"}
+            {:person/first-name "Petter"}]
+           (read-query
+             {:query '{:find  [[?e ...]]
+                       :where [[?e :person/first-name]]}
+              :sort  {:key-fn :person/first-name}}
+             {:pull [:person/first-name]})
+           ))
+    (is (= [{:person/first-name "Petter"}
+            {:person/first-name "Diana"}]
+           (read-query
+             {:query '{:find  [[?e ...]]
+                       :where [[?e :person/first-name]]}
+              :sort  {:key-fn :person/first-name
+                      :order  :decending}}
+             {:pull [:person/first-name]}))))
 
-    (let [reads
-          {:people/order-eid-accending
-           {:query '{:find  [[?e ...]]
-                     :where [[?e :person/first-name]]}
-            :sort  {}}
-           :people/order-eid-decending
-           {:query '{:find  [[?e ...]]
-                     :where [[?e :person/first-name]]}
-            :sort  {:order :decending}}}]
-      (testing ":order without query"
-        (is (apply < (:people/order-eid-accending
-                       (*parser* {:db *db* :reads reads} [:people/order-eid-accending]))))
-        (is (apply < (do-read
-                       {:query '{:find  [[?e ...]]
-                                 :where [[?e :person/first-name]]}
-                        :sort  {}})))
+  (testing ":order without query"
+    (is (apply < (read-query
+                   {:query '{:find  [[?e ...]]
+                             :where [[?e :person/first-name]]}
+                    :sort  {}})))
 
-        (is (apply > (:people/order-eid-decending
-                       (*parser* {:db *db* :reads reads} [:people/order-eid-decending]))))
-        (is (apply > (do-read
-                       {:query '{:find  [[?e ...]]
-                                 :where [[?e :person/first-name]]}
-                        :sort  {:order :decending}})))))))
+    (is (apply > (read-query
+                   {:query '{:find  [[?e ...]]
+                             :where [[?e :person/first-name]]}
+                    :sort  {:order :decending}})))))
 
 (deftest reads-depending-on-other-reads
   (let [reads
@@ -225,60 +164,36 @@
       (is (== 1 @state)))))
 
 (deftest reads-by-lookup-ref
-  (let [reads
-        {:lookup/petter
-         ;; Lookup ref instead of query
-         {:lookup-ref [:person/first-name "Petter"]}
-         :lookup/diana
-         {:lookup-ref [:person/first-name "Diana"]}}]
-    (testing "reads by lookup-ref"
-      (is (= (:lookup/petter (*parser* {:db    *db*
-                                        :reads reads}
-                                       [:lookup/petter]))
-             (d/q '{:find  [?e .]
-                    :where [[?e :person/first-name "Petter"]]}
-                  *db*)
+  (testing "reads by lookup-ref"
+    (is (= (d/q '{:find  [?e .]
+                  :where [[?e :person/first-name "Petter"]]}
+                *db*)
+           (read-query {:lookup-ref [:person/first-name "Petter"]})))
+    (is (= (d/q '{:find  [?e .]
+                  :where [[?e :person/first-name "Diana"]]}
+                *db*)
+           (read-query {:lookup-ref [:person/first-name "Diana"]})))
 
-             (do-read
-               {:lookup-ref [:person/first-name "Petter"]})))
-      (is (= (:lookup/diana (*parser* {:db    *db*
-                                       :reads reads} [:lookup/diana]))
-             (d/q '{:find  [?e .]
-                    :where [[?e :person/first-name "Diana"]]}
-                  *db*)
-             (do-read {:lookup-ref [:person/first-name "Diana"]})))
+    (testing "can pull on lookup-refs"
+      (is (= {:person/first-name "Petter"}
+             (read-query {:lookup-ref [:person/first-name "Petter"]}
+                         {:pull [:person/first-name]})))
+      (is (= {:person/first-name "Diana"}
+             (read-query {:lookup-ref [:person/first-name "Diana"]}
+                         {:pull [:person/first-name]})))))
 
-      (testing "can pull on lookup-refs"
-        (is (= {:person/first-name "Petter"}
-               (:lookup/petter (*parser*
-                                 {:db    *db*
-                                  :reads reads}
-                                 [{:lookup/petter
-                                   [:person/first-name]}]))
-               (do-read {:lookup-ref [:person/first-name "Petter"]}
-                        {:pull [:person/first-name]})
-               ))
-        (is (= {:person/first-name "Diana"}
-               (:lookup/diana (*parser*
-                                {:db    *db*
-                                 :reads reads}
-                                [{:lookup/diana
-                                  [:person/first-name]}]))
-               (do-read {:lookup-ref [:person/first-name "Diana"]}
-                        {:pull [:person/first-name]})))))
-
-    (testing "cannot have both lookup ref and query"
-      (is (thrown-with-msg?
-            #?(:clj Exception :cljs js/Error)
-            #"lookup.*query"
-            (*parser*
-              {:db    *db*
-               :reads {:crash/lookup+query
-                       ;; Cannot have both lookup ref and query
-                       {:lookup-ref [:person/first-name "Petter"]
-                        :query      '{:find  [?e .]
-                                      :where [[?e :person/first-name]]}}}}
-              [:crash/lookup+query]))))))
+  (testing "cannot have both lookup ref and query"
+    (is (thrown-with-msg?
+          #?(:clj Exception :cljs js/Error)
+          #"lookup.*query"
+          (*parser*
+            {:db    *db*
+             :reads {:crash/lookup+query
+                     ;; Cannot have both lookup ref and query
+                     {:lookup-ref [:person/first-name "Petter"]
+                      :query      '{:find  [?e .]
+                                    :where [[?e :person/first-name]]}}}}
+            [:crash/lookup+query])))))
 
 (deftest reading-non-existent-key-throws
   (testing "Calls on key that does not exist, throws"
