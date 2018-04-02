@@ -1,9 +1,13 @@
 (ns lajt.read.ops
   (:require
+    #?(:clj
+        [clojure.data])
     [medley.core :as m]
     [clojure.spec.alpha :as s]
     [clojure.string :as string]
     [clojure.spec.gen.alpha :as gen]))
+
+(def ^:dynamic *debug*)
 
 (defn assoc-scoped [env k v]
   (assoc-in env [k (:read-key env)] v))
@@ -39,12 +43,13 @@
     (assoc env :depends-on (:results env))))
 
 (defn call-fns [x env]
-  (cond (fn? x) (x env)
-        (vector? x) (reduce #(%2 %1) env x)
-        :else
-        (throw (ex-info "Unknown call chain: " x
-                        {:call-chain x
-                         :env        env}))))
+  (when (some? x)
+    (cond (fn? x) (x env)
+          (vector? x) (reduce #(%2 %1) env x)
+          :else
+          (throw (ex-info "Unknown call chain: " x
+                          {:call-chain x
+                           :env        env})))))
 
 (defmethod call-op :before
   [env _ v]
@@ -70,15 +75,22 @@
 (defmethod call-op :query
   [env k query]
   (let [q-params (get-scoped env :params)
-        query (update query :in #(into (vec (or % '[$]))
-                                       (keys q-params)))
-        res (apply (get-in env [:db-fns :q]) query (:db env)
-                   (vals q-params))]
-    #_(prn {:op     k
-            :result res
-            :query  query
-            :params q-params})
-    (add-result env res)))
+        values-set? (every? (comp some? val) q-params)]
+    (if values-set?
+      (let [query (update query :in #(into (vec (or % '[$]))
+                                           (keys q-params)))
+            res (apply (get-in env [:db-fns :q]) query (:db env)
+                       (vals q-params))]
+
+        #_(prn {:op     k
+                :result res
+                :query  query
+                :params q-params})
+        (add-result env res))
+      (when *debug*
+        (prn "WARN: Not all params were set when executing query: "
+             (:read-key env)
+             " Returning nil.")))))
 
 (defmethod call-op :lookup-ref
   [env _ ref]
@@ -151,3 +163,13 @@
                        :query     query
                        :find-type find-type})))
     (add-result env (some->> result (pull-fn (:db env) query)))))
+
+(defn call [env k v]
+  (let [ret (call-op env k v)]
+    #?(:clj
+       (when *debug*
+         (let [[before after] (clojure.data/diff env ret)]
+           (prn {:op     k
+                 :before before
+                 :after  after}))))
+    ret))

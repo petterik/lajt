@@ -204,6 +204,17 @@
                      :reads {}}
                     [:kdsoakdosa/kdsoakdsa])))))
 
+(deftest query-with-nil-params-is-nil
+  (is (nil? (read-query {:query  '{:find [?e .]}
+                         :params {'?e nil}})))
+  (is (nil? (read-query {:query  '{:find  [?e .]
+                                   :where [[?e :person/first-name ?name]]}
+                         :params {'?name nil}})))
+  (is (nil? (read-query {:query  '{:find  [?e .]
+                                   :where [[?e :person/first-name ?name]]}
+                         :params {'?name nil}}
+                        {:pull [:person/first-name]}))))
+
 (comment
   (do
     (def ^:dynamic *db* (->db))

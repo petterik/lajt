@@ -1,25 +1,11 @@
 (ns lajt.read
   (:require
-    [lajt.read.ops :as ops]
-    #?(:clj
-    [clojure.data])))
-
-(def ^:dynamic *debug*)
+    [lajt.read.ops :as ops]))
 
 (def default-ops
   {:pre     [:depends-on :params :before]
    :actions [:query :lookup-ref]
    :post    [:sort ::ops/pull]})
-
-(defn- call-op [env k v]
-  (let [ret (ops/call-op env k v)]
-    #?(:clj
-       (when *debug*
-         (let [[before after] (clojure.data/diff env ret)]
-           (prn {:op     k
-                 :before before
-                 :after  after}))))
-    ret))
 
 (defn- validate-read! [{:keys [reads read-key] :as env}]
   (let [read-map (reads read-key)]
@@ -50,8 +36,7 @@
   (reduce (fn [{:keys [read-map] :as env} read-op]
             (cond-> env
                     (contains? read-map read-op)
-                    (call-op read-op
-                             (get read-map read-op))))
+                    (ops/call read-op (get read-map read-op))))
           env
           ops))
 
@@ -67,7 +52,7 @@
         env (perform-ops env (:pre read-ops))
         ;; Call an :action
         action (get-action env)
-        env (call-op env action (get-in env [:read-map action]))
+        env (ops/call env action (get-in env [:read-map action]))
         ;; Call :post ops
         env (perform-ops env (:post read-ops))]
     env))
@@ -78,7 +63,7 @@
 
 (defn ->read-fn [lajt-reads db-fns]
   (fn [env k p]
-    (binding [*debug* (:debug env false)]
+    (binding [ops/*debug* (:debug env false)]
       (let [env (assoc env :params p
                            :read-key k
                            :reads lajt-reads
