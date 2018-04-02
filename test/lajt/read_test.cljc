@@ -213,7 +213,39 @@
   (is (nil? (read-query {:query  '{:find  [?e .]
                                    :where [[?e :person/first-name ?name]]}
                          :params {'?name nil}}
-                        {:pull [:person/first-name]}))))
+                        {:pull [:person/first-name]})))
+
+  #_(testing "Multiple reads"
+    (let [reads
+          {:nil-params
+           {:query  '{:find  [?name .]
+                      :where [[?e :person/first-name ?name]]}
+            :params {'?name nil}}
+           :some-params
+           {:query  '{:find  [?name .]
+                      :where [[?e :person/first-name ?name]]}
+            :params {'?name "Petter"}}}]
+      (is (= {:nil-params  nil
+              :some-params "Petter"}
+             (*parser* {:db    *db*
+                        :reads reads}
+                       [:nil-params :some-params]))))))
+
+(deftest case-queries
+  (let [query {:base {:query '{:find  [?name .]
+                               :where [[?e :person/first-name ?name]]}}
+               :case [{[[:route-params :petter]]
+                       {:query '{:where [[?e :person/first-name "Petter"]]}}}
+
+                      {[[:route-params :diana]]
+                       {:query '{:where [[?e :person/first-name "Diana"]]}}}]}]
+    (is (= "Petter" (read-query query {:route-params {:petter "any"}})))
+    (is (= "Diana" (read-query query {:route-params {:diana "any"}})))
+    ;; Selects "Petter" first because order matters.
+    (is (= "Petter" (read-query query {:route-params {:diana "any"
+                                                      :petter "any"}})))
+    (is (nil? (read-query query {:route-params nil})))
+    ))
 
 (comment
   (do

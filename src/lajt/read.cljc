@@ -3,8 +3,8 @@
     [lajt.read.ops :as ops]))
 
 (def default-ops
-  {:pre     [:depends-on :params :before]
-   :actions [:query :lookup-ref]
+  {:pre     [:case :depends-on :params :before]
+   :actions [:query :lookup-ref :no-op]
    :post    [:sort ::ops/pull]})
 
 (defn- validate-read! [{:keys [reads read-key] :as env}]
@@ -32,30 +32,38 @@
            :read-map read-map
            :query    (:query env)})))))
 
-(defn- perform-ops [env ops]
-  (reduce (fn [{:keys [read-map] :as env} read-op]
-            (cond-> env
-                    (contains? read-map read-op)
-                    (ops/call read-op (get read-map read-op))))
-          env
-          ops))
+(defn- perform-op [{:keys [read-map] :as env} read-op]
+  (let [after (cond-> env
+                      (contains? read-map read-op)
+                      (ops/call read-op (get read-map read-op)))]
+    (if (= (:read-map env)
+           (:read-map after))
+      after
+      (reduced {::new-map after}))))
 
-(defn perform-read [{:keys [reads read-key read-ops] :as env}]
-  (validate-read! env)
+(defn- perform-ops [env ops]
+  (reduce perform-op env ops))
+
+(defn- perform-read* [{:keys [read-ops] :as env}]
   (let [
-        ;; Adds read-map with an additional ::ops/pull action
-        ;; whenever there's a query.
-        env (cond-> (assoc env :read-map (reads read-key))
-                    (not-empty (:query env))
-                    (assoc-in [:read-map ::ops/pull] (:query env)))
         ;; Performs the :pre ops
-        env (perform-ops env (:pre read-ops))
-        ;; Call an :action
-        action (get-action env)
-        env (ops/call env action (get-in env [:read-map action]))
-        ;; Call :post ops
-        env (perform-ops env (:post read-ops))]
-    env))
+        env (perform-ops env (:pre read-ops))]
+    ;; Check if :pre-ops changed the read-map
+    (if-some [nm (::new-map env)]
+      (recur nm)
+      ;; Perform the action and the :post ops.
+      (let [action (get-action env)
+            ;; Adds read-map with an additional ::ops/pull action
+            ;; whenever there's a query.
+            env (cond-> env
+                        (not-empty (:query env))
+                        (assoc-in [:read-map ::ops/pull] (:query env)))
+            env (ops/call env action (get-in env [:read-map action]))]
+        (perform-ops env (:post read-ops))))))
+
+(defn perform-read [{:keys [reads read-key] :as env}]
+  (validate-read! env)
+  (perform-read* (assoc env :read-map (reads read-key))))
 
 (defn om-next-value-wrapper [read]
   (fn [env k p]

@@ -76,7 +76,13 @@
   [env k query]
   (let [q-params (get-scoped env :params)
         values-set? (every? (comp some? val) q-params)]
-    (if values-set?
+    (if-not values-set?
+      (do
+        (when *debug*
+          (prn "WARN: Not all params were set when executing query: "
+               (:read-key env)
+               " Returning nil."))
+        env)
       (let [query (update query :in #(into (vec (or % '[$]))
                                            (keys q-params)))
             res (apply (get-in env [:db-fns :q]) query (:db env)
@@ -86,15 +92,15 @@
                 :result res
                 :query  query
                 :params q-params})
-        (add-result env res))
-      (when *debug*
-        (prn "WARN: Not all params were set when executing query: "
-             (:read-key env)
-             " Returning nil.")))))
+        (add-result env res)))))
 
 (defmethod call-op :lookup-ref
   [env _ ref]
   (add-result env ((get-in env [:db-fns :entid]) (:db env) ref)))
+
+(defmethod call-op :no-op
+  [env _ _]
+  env)
 
 (defmethod call-op :sort
   [env _ sort-map]
@@ -164,12 +170,125 @@
                        :find-type find-type})))
     (add-result env (some->> result (pull-fn (:db env) query)))))
 
+;; base+case
+
+(s/def ::fn-call (s/or :keyword keyword? :fn fn?))
+(s/def ::fn-calls (s/coll-of ::fn-call :type vector? :gen-max 3))
+
+(s/def ::case-pred (s/or :fn fn?
+                         :case ::fn-calls))
+(s/def ::case-preds (s/or
+                      :one ::case-pred
+                      :multiple (s/coll-of ::case-pred :type vector? :gen-max 3)))
+
+;; TODO: The map here is really a query. Enter the query spec
+;;       once we have one.
+(s/def ::case-val map?)
+(s/def ::case-map (s/map-of ::case-preds ::case-val
+                            :conform-keys true
+                            :count 1))
+(s/def ::cases (s/+ ::case-map))
+
+(comment
+
+  (def -cases
+    [{[[:route-params :petter] #(-> %)]
+      {:query '{:where [[?e :person/first-name "Petter"]]}}}
+
+     {[:route-params :diana]
+      {:query '{:where [[?e :person/first-name "Diana"]]}}}
+
+     {[[:route-params :diana]]
+      {:query '{:where [[?e :person/first-name "Diana"]]}}
+      }
+
+
+
+     {#(-> % :foo) {}}])
+
+  (s/conform ::cases -cases)
+  (s/explain ::cases -cases)
+  (s/conform ::case-map (first -cases))
+  (s/conform ::case-pred (key (ffirst -cases)))
+  (s/unform ::case-pred (s/conform ::case-pred (key (ffirst -cases))))
+  )
+
+(defn- find-case-match [env cases]
+  (->> (s/conform ::cases cases)
+       (some (fn [case-map]
+               (let [[case-preds case-val] (first case-map)
+                     preds (cond-> (second case-preds)
+                                   (= :one (first case-preds))
+                                   vector)
+                     all? (->> preds
+                               (map (fn [case-pred]
+                                      (let [[type x] case-pred]
+                                        (condp = type
+                                          :fn (x env)
+                                          :case (call-fns
+                                                  (s/unform ::fn-calls x)
+                                                  env)))))
+                               (every? some?))]
+
+                 (when all?
+                   (s/unform ::case-val case-val)))))))
+
+(defmulti case-merge (fn [k o1 o2] k) :default ::default)
+(defmethod case-merge ::default
+  [_ o1 o2]
+  (merge o1 o2))
+
+(defn- merge-query [a b]
+  ;; TODO: handle cases where a symbol is present in multiple queries.
+  (-> (merge-with into
+                  (dissoc a :find)
+                  (dissoc b :find))
+      (assoc :find (or (:find a) (:find b)))))
+
+(defmethod case-merge :query
+  [_ o1 o2]
+  (merge-query o1 o2))
+
+(defmethod call-op :case
+  [{:keys [read-map] :as env} _ cases]
+  (let [base (:base read-map)
+        match (find-case-match env cases)
+        read-map (if (nil? match)
+                   {:no-op nil}
+                   (reduce-kv (fn [m k right]
+                                (if-some [[_ left] (find m k)]
+                                  (assoc m k (case-merge k left right))
+                                  (assoc m k right)))
+                              base
+                              match))]
+    ;; Changes the read-map to be the new merged map.
+    (assoc env :read-map read-map)))
+
 (defn call [env k v]
-  (let [ret (call-op env k v)]
-    #?(:clj
-       (when *debug*
-         (let [[before after] (clojure.data/diff env ret)]
+  #?(:cljs
+     (call-op env k v)
+     :clj
+     (try
+       (let [ret (call-op env k v)]
+         (when *debug*
+           (let [[before after] (clojure.data/diff env ret)]
+             (prn {:op     k
+                   :before before
+                   :after  after})))
+         ret)
+       (catch Throwable t
+         (when *debug*
            (prn {:op     k
-                 :before before
-                 :after  after}))))
+                 :before (select-keys env [:read-map :read-key :query])
+                 :after  :exception
+                 :ex     (Throwable->map t)}))
+         (throw t)))))
+
+(comment
+  (let [ret nil]
+    (when-not (map? ret)
+      (throw (ex-info (str "Call to op: " k
+                           " did not return a map."
+                           " Must return a new environment")
+                      {:op k :val v})))
     ret))
