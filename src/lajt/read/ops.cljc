@@ -150,4 +150,4 @@
                       {:read-map  read-map
                        :query     query
                        :find-type find-type})))
-    (add-result env (pull-fn (:db env) query result))))
+    (add-result env (some->> result (pull-fn (:db env) query)))))
