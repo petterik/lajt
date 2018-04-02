@@ -2,6 +2,10 @@
 
 * jthomsom om.next notes: https://gist.github.com/jpthomson/6f0333defcaa9b1b29f914bb965c99ef
 
+## Similar work:
+
+* martinklepsch / derivatives: https://github.com/martinklepsch/derivatives
+
 ## Notes from a plane between Montreal and San Francisco
 
 What are the essentials?
