@@ -244,8 +244,11 @@
     ;; Selects "Petter" first because order matters.
     (is (= "Petter" (read-query query {:route-params {:diana "any"
                                                       :petter "any"}})))
-    (is (nil? (read-query query {:route-params nil})))
-    ))
+    (is (nil? (read-query query {:route-params nil})))))
+
+(deftest function-in-find-pattern-test
+  (is (= 2 (read-query {:query '{:find  [(count ?e) .]
+                                 :where [[?e :person/first-name]]}}))))
 
 (comment
   (do
