@@ -225,23 +225,23 @@
   (is (nil? (read-query {:query  '{:find  [?e .]
                                    :where [[?e :person/first-name ?name]]}
                          :params {'?name nil}}
-                        {:pull [:person/first-name]})))
+                        {:pull [:person/first-name]}))))
 
-  #_(testing "Multiple reads"
-    (let [reads
-          {:nil-params
-           {:query  '{:find  [?name .]
-                      :where [[?e :person/first-name ?name]]}
-            :params {'?name nil}}
-           :some-params
-           {:query  '{:find  [?name .]
-                      :where [[?e :person/first-name ?name]]}
-            :params {'?name "Petter"}}}]
-      (is (= {:nil-params  nil
-              :some-params "Petter"}
-             (*parser* {:db    *db*
-                        :reads reads}
-                       [:nil-params :some-params]))))))
+(deftest multiple-reads-test
+  (let [reads
+        {:nil-params
+         {:query  '{:find  [?name .]
+                    :where [[?e :person/first-name ?name]]}
+          :params {'?name nil}}
+         :some-params
+         {:query  '{:find  [?name .]
+                    :where [[?e :person/first-name ?name]]}
+          :params {'?name (constantly "Petter")}}}]
+    (is (= {:nil-params  nil
+            :some-params "Petter"}
+           (*parser* {:db    *db*
+                      :reads reads}
+                     [:nil-params :some-params])))))
 
 (deftest case-queries
   (let [query {:base {:query '{:find  [?name .]

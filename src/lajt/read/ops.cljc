@@ -48,7 +48,7 @@
     (cond (fn? x) (x env)
           (vector? x) (reduce #(%2 %1) env x)
           :else
-          (throw (ex-info "Unknown call chain: " x
+          (throw (ex-info (str "Unknown call chain: " x)
                           {:call-chain x
                            :env        env})))))
 
