@@ -82,6 +82,8 @@
           {t ret}
           (sequential? ret)
           {t (wrap-query-in-join-ast env ret)}
+          (fn? ret)
+          {t (wrap-query-in-join-ast env (ret env))}
           :else
           (throw (ex-info (str "Unknown return value for read key: " k
                                " when parser was called with target: " t)
