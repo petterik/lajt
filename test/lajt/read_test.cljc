@@ -148,7 +148,19 @@
                                   :route-params {:name name}}
                                  [{:person/by-any-name [:person/first-name]}])))
         "Petter"
-        "Diana"))))
+        "Diana"))
+    (testing ":depends-on can be a function"
+      (let [name "Petter"
+            reads (update-in reads [:person/by-any-name :depends-on]
+                             (fn [deps]
+                               (fn [env]
+                                 deps)))]
+        (is (= {:person/first-name name}
+               (:person/by-any-name
+                 (*parser* {:db           *db*
+                            :reads        reads
+                            :route-params {:name name}}
+                           [{:person/by-any-name [:person/first-name]}]))))))))
 
 (deftest reads-with-a-before-function
   (testing ":before function gets run before the query"

@@ -36,7 +36,8 @@
 
 (defmethod call-op :depends-on
   [env _ v]
-  (let [res ((:parser env) env v)
+  (let [query (if (fn? v) (v env) v)
+        res ((:parser env) env query)
         env (update env :results merge res)]
     ;; Assoc the :depends-on key with all results
     ;; such reads can access it easily.
@@ -300,6 +301,8 @@
      (call-op env k v)
      :clj
      (try
+       (when *debug*
+         (prn "Entering op: " k))
        (let [ret (call-op env k v)]
          (when *debug*
            (let [[before after] (clojure.data/diff env ret)]
