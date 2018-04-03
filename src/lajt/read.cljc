@@ -65,8 +65,29 @@
   (validate-read! env)
   (perform-read* (assoc env :read-map (reads read-key))))
 
+(defn- wrap-query-in-join-ast [env remote-ret]
+  (if-some [->ast (:om.next.parser.impl/expr->ast env)]
+    (let [{:keys [join-namespace]} ((:parser env))
+          join-key (keyword (name join-namespace) (name (gensym)))]
+      (->ast {join-key remote-ret}))
+    (throw (ex-info (str "Must pass :om.next/expr->ast to env when "
+                         "using lajt.read/om-next-value-wrapper.")))))
+
 (defn om-next-value-wrapper [read]
   (fn [env k p]
+    (let [ret (read env k p)]
+      (if-some [t (:target env)]
+        (cond
+          (true? ret)
+          {t ret}
+          (sequential? ret)
+          {t (wrap-query-in-join-ast env ret)}
+          :else
+          (throw (ex-info (str "Unknown return value for read key: " k
+                               " when parser was called with target: " t)
+                          {:read-key k
+                           :target   t
+                           :query    (:query env)})))))
     {(or (:target env) :value) (read env k p)}))
 
 (defn ->read-fn [lajt-reads db-fns]
@@ -80,5 +101,3 @@
         (if-let [remote (:target env)]
           (get (lajt-reads k) remote)
           (ops/get-result (perform-read env)))))))
-
-
