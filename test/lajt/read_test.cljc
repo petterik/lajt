@@ -160,6 +160,25 @@
                  (*parser* {:db           *db*
                             :reads        reads
                             :route-params {:name name}}
+                           [{:person/by-any-name [:person/first-name]}]))))))
+
+    (testing ":depends-on can take a pull-pattern"
+      (let [reads
+            {:people
+             {:query  '{:find  [[?e ...]]
+                        :where [[?e :person/first-name ?name]]}
+              :params {'?name [:route-params :name]}}
+             :person/by-any-name
+             {:query      '{:find  [?e .]
+                            :where [[?e :person/first-name ?name]]}
+              :params     {'[[[_ ?name]] ...] [:depends-on :people]}
+              :depends-on [{:people [:person/first-name]}]}}
+            name "Petter"]
+        (is (= {:person/first-name name}
+               (:person/by-any-name
+                 (*parser* {:db           *db*
+                            :reads        reads
+                            :route-params {:name name}}
                            [{:person/by-any-name [:person/first-name]}]))))))))
 
 (deftest reads-with-a-before-function
