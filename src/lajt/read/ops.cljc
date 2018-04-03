@@ -139,36 +139,67 @@
                                #(gen/fmap (fn [sym] (symbol (str "?" (name sym))))
                                           (s/gen symbol?))))
 
-(s/def ::find-pattern (s/or :relation (s/+ ::logic-var)
-                            :tuple (s/tuple (s/+ ::logic-var))
-                            :scalar (s/cat :symbol ::logic-var
+(s/def ::aggregate (s/cat :fn symbol? :args (s/+ ::logic-var)))
+
+(s/def ::find-element (s/or :logic-var ::logic-var
+                            :aggregate ::aggregate))
+
+(s/def ::find-pattern (s/or :relation (s/+ ::find-element)
+                            :tuple (s/tuple (s/+ ::find-element))
+                            :scalar (s/cat :find-element ::find-element
                                            :dot '#{.})
-                            :collection (s/tuple (s/cat :symbol ::logic-var
-                                                        :dots '#{...}))))
+                            :collection (s/tuple (s/cat :find-element
+                                                        ::find-element
+                                                        :dots
+                                                        '#{...}))))
+(s/conform ::find-pattern '[(count ?e) .])
 
-(defn find-pattern-type [env read-map]
-  (if (some? (:lookup-ref read-map))
-    :scalar
-    (let [[type] (s/conform ::find-pattern
-                            (get-in read-map [:query :find]))]
-      type)))
+(defn- pull-fn-by-action-result [env]
+  (let [res (get-result env)]
+    (if (or (number? res)
+            ;; Lookup ref results
+            (and (sequential? res)
+                 (== 2 (count res))
+                 (keyword? (first res))
+                 (some? (second res))))
+      :pull
+      (when (and (sequential? res)
+                 (every? pos-int? res))
+        :pull-many))))
 
-(def find-type->pull-fn
-  {:scalar     :pull
-   :collection :pull-many})
+(defn pull-type [env read-map]
+  (cond
+    (some? (:lookup-ref read-map))
+    (pull-fn-by-action-result env)
+
+    (some? (:query read-map))
+    (let [[type m] (s/conform ::find-pattern (get-in read-map [:query :find]))
+          [find-element] (:find-element m)]
+      ;; An aggregate can return any type of result.
+      ;; Look for the find-pattern type in the result.
+      (if (= :aggregate find-element)
+        (pull-fn-by-action-result env)
+        (condp = type
+          :scalar :pull
+          :collection :pull-many)))
+    :else
+    (throw (ex-info (str ":find-pattern-type not implemented for "
+                         "read-map with keys: " (keys read-map))
+                    ;; TODO: env->ex-data
+                    {:read-map read-map}))))
 
 (defmethod call-op ::pull
   [{:keys [read-map] :as env} _ query]
-  (let [find-type (find-pattern-type env read-map)
-        result (get-result env)
-        pull-fn (get-in env [:db-fns (find-type->pull-fn find-type)])]
+  (let [pull-type (pull-type env read-map)
+        pull-fn (get-in env [:db-fns pull-type])]
     (when (nil? pull-fn)
-      (throw (ex-info (str "WARN: Tried to perform a pull on a query that"
+      (throw (ex-info (str "WARN: Cannot perform a pull on a query that"
                            " was not of :scalar or :collection find-pattern type.")
                       {:read-map  read-map
                        :query     query
-                       :find-type find-type})))
-    (add-result env (some->> result (pull-fn (:db env) query)))))
+                       :pull-type pull-type})))
+    (add-result env (some->> (get-result env)
+                             (pull-fn (:db env) query)))))
 
 ;; base+case
 

@@ -248,7 +248,13 @@
 
 (deftest function-in-find-pattern-test
   (is (= 2 (read-query {:query '{:find  [(count ?e) .]
-                                 :where [[?e :person/first-name]]}}))))
+                                 :where [[?e :person/first-name]]}})))
+  (is (= #{{:person/first-name "Petter"}
+           {:person/first-name "Diana"}}
+         (set
+           (read-query {:query '{:find  [(distinct ?e) .]
+                                 :where [[?e :person/first-name]]}}
+                       {:pull [:person/first-name]})))))
 
 (comment
   (do
