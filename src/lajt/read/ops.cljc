@@ -24,6 +24,9 @@
   [env]
   (get-scoped env :results))
 
+(defn remove-pull [env]
+  (update env :read-map dissoc ::pull))
+
 ;; ############
 ;; Ops
 
@@ -103,7 +106,7 @@
 
 (defmethod call-op :no-op
   [env _ _]
-  env)
+  (remove-pull env))
 
 (defmethod call-op :sort
   [env _ sort-map]
@@ -172,6 +175,7 @@
 
 (defn pull-type [env read-map]
   (cond
+    ;; TODO: let actions define if they can pull or not?
     (some? (:lookup-ref read-map))
     (pull-fn-by-action-result env)
 
@@ -185,6 +189,9 @@
         (condp = type
           :scalar :pull
           :collection :pull-many)))
+
+    (some? (:custom read-map))
+    (pull-fn-by-action-result env)
     :else
     (throw (ex-info (str ":find-pattern-type not implemented for "
                          "read-map with keys: " (keys read-map))
@@ -194,14 +201,16 @@
 (defmethod call-op ::pull
   [{:keys [read-map] :as env} _ query]
   (let [pull-type (pull-type env read-map)
-        pull-fn (get-in env [:db-fns pull-type])]
-    (when (nil? pull-fn)
+        pull-fn (get-in env [:db-fns pull-type])
+        result (get-result env)]
+    (when (and (some? pull-type) (nil? pull-fn))
       (throw (ex-info (str "WARN: Cannot perform a pull on a query that"
                            " was not of :scalar or :collection find-pattern type.")
                       {:read-map  read-map
                        :query     query
                        :pull-type pull-type})))
-    (add-result env (some->> (get-result env)
+    (add-result env (cond->> result
+                             (and (some? result) (some? pull-fn))
                              (pull-fn (:db env) query)))))
 
 ;; base+case

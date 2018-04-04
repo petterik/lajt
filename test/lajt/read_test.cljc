@@ -299,6 +299,10 @@
   (is (= ::custom-result
          (read-query {:custom (fn [env] ::custom-result)}))))
 
+(deftest no-op-test
+  (is (nil? (read-query {:no-op true})))
+  (is (nil? (read-query {:no-op true} {:pull [:something]}))))
+
 (comment
   (do
     (def ^:dynamic *db* (->db))

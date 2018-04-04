@@ -23,7 +23,8 @@
                       ({:join/c [:read-key]} {:param 1})
                       ({:union/b {:union.b/a [:read-key]}} {:param 1})
                       (mutate-no-params)
-                      (mutate-with-params {:param 1})])
+                      (mutate-with-params {:param 1})
+                      {:join/recursive [:read-key {:recur ...}]}])
          '{:read-key          {}
            :join/a            {:query [:read-key]}
            :join/b            {:query [{:join/a [:read-key]}]}
@@ -32,8 +33,10 @@
            :read-key2         {:params {:param 1}}
            :join/c            {:query [:read-key] :params {:param 1}}
            :union/b           {:query {:union.b/a [:read-key]} :params {:param 1}}
+           :join/recursive    {:query [:read-key {:recur ...}]}
            mutate-no-params   {}
-           mutate-with-params {:params {:param 1}}})))
+           mutate-with-params {:params {:param 1}}}))
+  (is (nil? (parser {} []))))
 
 (deftest query-parser-test
   (binding [s/*compile-asserts* true]
@@ -172,7 +175,7 @@
                                     :union-namespace :union
                                     :union-selector  (constantly ::selected)})]
     (are [query deduped] (= deduped
-                            (parser/dedupe-query parser query))
+                            (parser/dedupe-query parser {} query))
       [{:join [:read]} {:read [:a]}]
       [{:read [:a]}]
 
@@ -198,3 +201,14 @@
     ;; (as query params are banned for local reads).
     ;; Created https://github.com/petterik/lajt/issues/2
     ))
+
+(deftest dispatch-old-read-test
+  (let [read (fn [env k p] :choice)
+        conf {:read            read
+              :join-namespace  :join
+              :union-namespace :union
+              :union-selector  (fn [env k p]
+                                 (prn "in union selector")
+                                 (doto ((:read env) env k p) prn))}]
+    (is (= [:read-key]
+           (parser/dedupe-query conf {} [{:union {:choice [:read-key]}}])))))

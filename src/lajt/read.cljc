@@ -23,7 +23,9 @@
           (if (zero? (count actions))
             (str "read-map did not contain any of the actions."
                  " It must contain one of: "
-                 (:actions read-ops))
+                 (:actions read-ops)
+                 " had: "
+                 (keys read-map))
             (str "Cannot have multiple actions"
                  " in the read's map. Had actions: "
                  actions))
@@ -105,6 +107,8 @@
 (defn ->read-fn [lajt-reads db-fns]
   (fn [env k p]
     (binding [ops/*debug* (:debug env false)]
+      (when ops/*debug*
+        (prn "Calling read: " k))
       (let [env (assoc env :params p
                            :read-key k
                            :reads lajt-reads
