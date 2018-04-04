@@ -10,8 +10,8 @@
   {:extra-paths ["env/dev"]}
   :test
   {:extra-paths ["test"]
-   :extra-deps {org.clojure/test.check {:mvn/version "0.10.0-alpha2"}
-                com.clojure-goes-fast/clj-memory-meter {:mvn/version "0.1.0"}}}
+   :extra-deps  {org.clojure/test.check                 {:mvn/version "0.10.0-alpha2"}
+                 com.clojure-goes-fast/clj-memory-meter {:mvn/version "0.1.0"}}}
   :cljs-repl
   {:extra-deps {com.bhauman/rebel-readline-cljs {:mvn/version "0.1.1"}}}
   ;; Temp aliases
@@ -19,5 +19,17 @@
   {:extra-deps
    {org.clojure/clojurescript
     {:git/url "https://github.com/mfikes/clojurescript"
-     :sha "9aeac990d10457cc4567c6d65efbcda94761f1f7"}}}}}
+     :sha     "9aeac990d10457cc4567c6d65efbcda94761f1f7"}}}
+
+  :uberjar
+  {:extra-deps
+              {pack/pack.alpha
+               {:git/url "https://github.com/juxt/pack.alpha.git"
+                :sha     "bb2c5a2c78aca9328e023b029c06ba0efdd1e3b7"}}
+   :main-opts ["-m" "mach.pack.alpha.jcl"
+               "deps.edn"
+               "target/lajt-0.1.0-SNAPSHOT-standalone.jar"
+               "--application-id" "petterik/lajt"
+               "--application-version" "0.1.0-SNAPSHOT"
+               ]}}}
 
