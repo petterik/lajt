@@ -18,11 +18,11 @@
 (defn add-result
   "Adds a result to env. Convenicence function for actions."
   [env res]
-  (assoc-scoped env :result res))
+  (assoc-scoped env :results res))
 
 (defn get-result
   [env]
-  (get-scoped env :result))
+  (get-scoped env :results))
 
 ;; ############
 ;; Ops
@@ -43,7 +43,9 @@
     ;; such reads can access it easily.
     (assoc env :depends-on (:results env))))
 
-(defn call-fns [x env]
+(defn call-fns
+  "Calls a single function or a vector of functions with the env."
+  [x env]
   (when (some? x)
     (cond (fn? x) (x env)
           (vector? x) (reduce #(%2 %1) env x)
@@ -295,6 +297,12 @@
                               match))]
     ;; Changes the read-map to be the new merged map.
     (assoc env :read-map read-map)))
+
+(defmethod call-op :after
+  [env _ calls]
+  ;; :after sets the result to whatever the functions return.
+  ;; Functions are passed the result as argument.
+  (add-result env (call-fns calls env)))
 
 (defn call [env k v]
   #?(:cljs

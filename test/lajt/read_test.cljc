@@ -287,10 +287,24 @@
                                  :where [[?e :person/first-name]]}}
                        {:pull [:person/first-name]})))))
 
+(deftest after-test
+  (is (= [{:person/first-name "Petter"}
+          {:person/first-name "Diana"}]
+        (read-query {:query '{:find  [[?e ...]]
+                              :where [[?e :person/first-name]]}
+                     :after [:result (partial sort-by :person/first-name) reverse]}
+                    {:pull [:person/first-name]}))))
+
 (comment
   (do
     (def ^:dynamic *db* (->db))
     (def ^:dynamic *parser* (debug-parser (->parser)))
 
     )
+  (is (= [{:person/first-name "Petter"}
+          {:person/first-name "Diana"}]
+         (read-query {:query '{:find  [[?e ...]]
+                               :where [[?e :person/first-name]]}
+                      :after [:result (partial sort-by :person/first-name) reverse]}
+                     {:pull [:person/first-name]})))
   )

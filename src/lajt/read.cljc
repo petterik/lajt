@@ -5,7 +5,7 @@
 (def default-ops
   {:pre     [:case :depends-on :params :before]
    :actions [:query :lookup-ref :no-op]
-   :post    [:sort ::ops/pull]})
+   :post    [:sort ::ops/pull :after]})
 
 (defn- validate-read! [{:keys [reads read-key] :as env}]
   (let [read-map (reads read-key)]
@@ -33,33 +33,42 @@
            :query    (:query env)})))))
 
 (defn- perform-op [{:keys [read-map] :as env} read-op]
-  (let [after (cond-> env
-                      (contains? read-map read-op)
-                      (ops/call read-op (get read-map read-op)))]
-    (if (= (:read-map env)
-           (:read-map after))
-      after
-      (reduced {::new-map after}))))
+  (cond-> env
+          (contains? read-map read-op)
+          (ops/call read-op (get read-map read-op))))
 
-(defn- perform-ops [env ops]
-  (reduce perform-op env ops))
+(defn- perform-ops [env ops post-call-fn]
+  (reduce (fn [env op]
+            (post-call-fn env (perform-op env op)))
+          env
+          ops))
 
 (defn- perform-read* [{:keys [read-ops] :as env}]
   (let [
         ;; Performs the :pre ops
-        env (perform-ops env (:pre read-ops))]
+        env (perform-ops env
+                         (:pre read-ops)
+                         (fn [env after]
+                           (if (= (:read-map env) (:read-map after))
+                             after
+                             (reduced {::new-map after}))))]
     ;; Check if :pre-ops changed the read-map
     (if-some [nm (::new-map env)]
       (recur nm)
-      ;; Perform the action and the :post ops.
-      (let [action (get-action env)
+      (let [
             ;; Adds read-map with an additional ::ops/pull action
             ;; whenever there's a query.
             env (cond-> env
                         (not-empty (:query env))
                         (assoc-in [:read-map ::ops/pull] (:query env)))
-            env (ops/call env action (get-in env [:read-map action]))]
-        (perform-ops env (:post read-ops))))))
+            ;; Perform the action
+            env (perform-op env (get-action env))
+            assoc-result #(assoc % :result (ops/get-result %))]
+
+        (perform-ops (assoc-result env)
+                     (:post read-ops)
+                     (fn [_ after]
+                       (assoc-result after)))))))
 
 (defn perform-read [{:keys [reads read-key] :as env}]
   (validate-read! env)
@@ -71,7 +80,8 @@
           join-key (keyword (name join-namespace) (name (gensym)))]
       (->ast {join-key remote-ret}))
     (throw (ex-info (str "Must pass :om.next/expr->ast to env when "
-                         "using lajt.read/om-next-value-wrapper.")))))
+                         "using lajt.read/om-next-value-wrapper.")
+                    {}))))
 
 (defn om-next-value-wrapper [read]
   (fn [env k p]
