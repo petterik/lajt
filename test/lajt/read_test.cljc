@@ -295,6 +295,10 @@
                      :after [:result (partial sort-by :person/first-name) reverse]}
                     {:pull [:person/first-name]}))))
 
+(deftest custom-action-test
+  (is (= ::custom-result
+         (read-query {:custom (fn [env] ::custom-result)}))))
+
 (comment
   (do
     (def ^:dynamic *db* (->db))

@@ -4,7 +4,7 @@
 
 (def default-ops
   {:pre     [:case :depends-on :params :before]
-   :actions [:query :lookup-ref :no-op]
+   :actions [:query :lookup-ref :custom :no-op]
    :post    [:sort ::ops/pull :after]})
 
 (defn- validate-read! [{:keys [reads read-key] :as env}]

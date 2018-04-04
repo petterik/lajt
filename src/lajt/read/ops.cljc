@@ -304,6 +304,12 @@
   ;; Functions are passed the result as argument.
   (add-result env (call-fns calls env)))
 
+(defmethod call-op :custom
+  [env _ custom-fn]
+  ;; :after sets the result to whatever the functions return.
+  ;; Functions are passed the result as argument.
+  (add-result env (custom-fn env)))
+
 (defn call [env k v]
   #?(:cljs
      (call-op env k v)
