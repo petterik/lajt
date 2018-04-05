@@ -7,12 +7,11 @@
    :actions [:query :lookup-ref :custom :no-op]
    :post    [:sort ::ops/pull :after]})
 
-(defn- validate-read! [{:keys [reads read-key] :as env}]
-  (let [read-map (reads read-key)]
-    (when (nil? read-map)
-      (throw (ex-info (str "No such read: " read-key)
-                      {:read-key read-key
-                       :query    (:query env)})))))
+(defn- validate-read! [{:keys [read-map read-key] :as env}]
+  (when (nil? read-map)
+    (throw (ex-info (str "No such read: " read-key)
+                    {:read-key read-key
+                     :query    (:query env)}))))
 
 (defn- get-action [{:keys [read-map read-key read-ops] :as env}]
   (let [actions (filterv (set (:actions read-ops)) (keys read-map))]
@@ -45,10 +44,8 @@
           env
           ops))
 
-(defn- perform-read* [{:keys [read-ops] :as env}]
-  (let [
-        ;; Performs the :pre ops
-        env (perform-ops env
+(defn- perform-pre-ops [{:keys [read-ops] :as env}]
+  (let [env (perform-ops env
                          (:pre read-ops)
                          (fn [env after]
                            (if (= (:read-map env) (:read-map after))
@@ -57,24 +54,25 @@
     ;; Check if :pre-ops changed the read-map
     (if-some [nm (::new-map env)]
       (recur nm)
-      (let [
-            ;; Adds read-map with an additional ::ops/pull action
-            ;; whenever there's a query.
-            env (cond-> env
-                        (not-empty (:query env))
-                        (assoc-in [:read-map ::ops/pull] (:query env)))
-            ;; Perform the action
-            env (perform-op env (get-action env))
-            assoc-result #(assoc % :result (ops/get-result %))]
+      env)))
 
-        (perform-ops (assoc-result env)
-                     (:post read-ops)
-                     (fn [_ after]
-                       (assoc-result after)))))))
+(defn- perform-post-ops [{:keys [read-ops] :as env}]
+  (let [assoc-result #(assoc % :result (ops/get-result %))]
+    (perform-ops (assoc-result env)
+                 (:post read-ops)
+                 (fn [_ after]
+                   (assoc-result after)))))
 
-(defn perform-read [{:keys [reads read-key] :as env}]
-  (validate-read! env)
-  (perform-read* (assoc env :read-map (reads read-key))))
+(defn perform-read [env]
+  (let [env (perform-pre-ops env)
+        ;; Adds read-map with an additional ::ops/pull action
+        ;; whenever there's a query.
+        env (cond-> env
+                    (not-empty (:query env))
+                    (assoc-in [:read-map ::ops/pull] (:query env)))
+        ;; Perform the action
+        env (perform-op env (get-action env))]
+    (perform-post-ops env)))
 
 (defn- wrap-query-in-join-ast [env remote-ret]
   (if-some [->ast (:om.next.parser.impl/expr->ast env)]
@@ -106,6 +104,15 @@
                            :query    (:query env)})))
         {:value ret}))))
 
+(defn perform-remote [{:keys [target] :as env}]
+  (let [env (perform-pre-ops env)
+        read-map (:read-map env)
+        ret (get read-map target)]
+    (when ret
+      (if (true? ret)
+        ret
+        (ops/call-fns ret env)))))
+
 (defn ->read-fn [lajt-reads db-fns]
   (fn [env k p]
     (binding [ops/*debug* (:debug env false)]
@@ -115,9 +122,10 @@
       (let [env (assoc env :params p
                            :read-key k
                            :reads lajt-reads
+                           :read-map (lajt-reads k)
                            :db-fns db-fns
                            :read-ops (:read-ops env default-ops))]
-        (if-let [remote (:target env)]
-          (let [ret (get (lajt-reads k) remote)]
-            (if (fn? ret) (ret env) ret))
+        (validate-read! env)
+        (if (some? (:target env))
+          (perform-remote env)
           (ops/get-result (perform-read env)))))))

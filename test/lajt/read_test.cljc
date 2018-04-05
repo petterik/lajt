@@ -307,18 +307,24 @@
   (is (nil? (read-query {:no-op true})))
   (is (nil? (read-query {:no-op true} {:pull [:something]}))))
 
+(deftest pre-ops-for-target
+  (doseq [remote [true #(-> % :params :remote?) [:params :remote?]]]
+    (is (= [:read]
+           (*parser* {:target :remote
+                      :reads  {:read {:remote remote
+                                      :params {:remote? (constantly true)}}}}
+                     [:read])))))
 (comment
   (do
     (def ^:dynamic *db* (->db))
     (def ^:dynamic *parser* (debug-parser (->parser)))
 
     )
-  (is (= [{:person/first-name "Petter"}
-          {:person/first-name "Diana"}]
-         (read-query {:query '{:find  [[?e ...]]
-                               :where [[?e :person/first-name]]}
-                      :after [:result (partial sort-by :person/first-name) reverse]}
-                     {:pull [:person/first-name]})))
+  (is (= [:read]
+         (*parser* {:target :remote
+                    :reads  {:read {:remote true
+                                    :params {:remote? (constantly true)}}}}
+                   [:read])))
 
 
 

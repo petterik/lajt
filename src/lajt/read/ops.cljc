@@ -9,20 +9,14 @@
 
 (def ^:dynamic *debug*)
 
-(defn assoc-scoped [env k v]
-  (assoc-in env [k (:read-key env)] v))
-
-(defn get-scoped [env k]
-  (get-in env [k (:read-key env)]))
-
 (defn add-result
   "Adds a result to env. Convenicence function for actions."
   [env res]
-  (assoc-scoped env :results res))
+  (assoc-in env [:results  (:read-key env)] res))
 
 (defn get-result
   [env]
-  (get-scoped env :results))
+  (get-in env [:results (:read-key env)]))
 
 (defn remove-pull [env]
   (update env :read-map dissoc ::pull))
@@ -64,23 +58,23 @@
 
 (defmethod call-op :params
   [env _ params]
-  (assoc-scoped env :params
-                (when (some? params)
-                  (cond
-                    (map? params)
-                    (m/map-vals #(call-fns % env) params)
+  (assoc env :params
+             (when (some? params)
+               (cond
+                 (map? params)
+                 (m/map-vals #(call-fns % env) params)
 
-                    (fn? params)
-                    (params env)
-                    :else
-                    (throw
-                      (ex-info
-                        ":params need to be a map or a function."
-                        {:params params}))))))
+                 (fn? params)
+                 (params env)
+                 :else
+                 (throw
+                   (ex-info
+                     ":params need to be a map or a function."
+                     {:params params}))))))
 
 (defmethod call-op :query
   [env k query]
-  (let [q-params (get-scoped env :params)
+  (let [q-params (:params env)
         values-set? (every? (comp some? val) q-params)]
     (if-not values-set?
       (do
