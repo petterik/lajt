@@ -173,7 +173,7 @@
                    (sort-by (comp {:mutate 0 :read 1} first))
                    (map (partial parse env)))]
       (if (nil? (:target env))
-        (not-empty (into {} ret))
+        (not-empty (into {} (remove (comp nil? second)) ret))
         (into [] cat ret)))))
 
 (defn- get-name
@@ -257,7 +257,7 @@
                     (sort-by (comp {:mutate 0 :read 1} first))
                     (map (partial parse env)))]
        (if (nil? (:target env))
-         (not-empty (into {} ret))
+         (not-empty (into {} (remove (comp nil? second)) ret))
          (into [] cat ret))))))
 
 ;; Merging queries

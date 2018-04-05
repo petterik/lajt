@@ -40,6 +40,7 @@
            mutate-with-params {:params {:param 1}}}))
   (is (nil? (parser {} [])))
 
+  ;; TODO: nil results should be removed from the parsed result.
   (testing "Reading with :target"
     (let [query [:some/read
                  {:join/a [:read-key]}
@@ -49,14 +50,24 @@
       (is (= (set query)
              (set (parser {:target :remote} query)))))))
 
+(defn parsers [conf]
+  (mapv #(% conf) [parser/parser parser/eager-parser]))
+
 (deftest query-parser-test
   (binding [s/*compile-asserts* true]
-    (parse-test-query
-      (parser/parser {:mutate read-mutate-handler
-                      :read   read-mutate-handler}))
-    (parse-test-query
-      (parser/eager-parser {:mutate read-mutate-handler
-                            :read   read-mutate-handler}))))
+    (doseq [parser (parsers {:mutate read-mutate-handler
+                             :read   read-mutate-handler})]
+      (parse-test-query parser))
+
+    (testing "removes key when parser read returns nil."
+      (doseq [parser (parsers {:read
+                               (fn [env k p]
+                                 (when-not (= k :return-nil)
+                                   (read-mutate-handler env k p)))})]
+        (is (= {:read-key {}}
+               (parser {} [:read-key :return-nil])))
+        ;; TODO: define what happens for mutates.
+        ))))
 
 (deftest recursive-dispatch-parsing-test
   (let [parser (parser/parser {:read                 read-mutate-handler
