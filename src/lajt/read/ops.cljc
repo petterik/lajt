@@ -40,10 +40,13 @@
 (defmethod call-op :depends-on
   [env _ v]
   (let [query (if (fn? v) (v env) v)
+        _ (prn "LAJT Executing query: " query)
         res ((:parser env) env query)
+        _ (prn "LAJT Query: " query " gave result: " res)
         env (update env :results merge res)]
     ;; Assoc the :depends-on key with all results
     ;; such reads can access it easily.
+    (prn ":depends-on resu")
     (assoc env :depends-on (:results env))))
 
 (defn call-fns
@@ -188,7 +191,10 @@
         (pull-fn-by-action-result env)
         (condp = type
           :scalar :pull
-          :collection :pull-many)))
+          :collection :pull-many
+          ;; TODO: Returning nil on :relation.
+          ;; Is this what we want?
+          nil)))
 
     (some? (:custom read-map))
     (pull-fn-by-action-result env)

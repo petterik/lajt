@@ -124,6 +124,12 @@
 (defn- union? [env]
   (map? (:query env)))
 
+(defn- targeted-return [ret]
+  (if (some? ret)
+    ;; TODO: Handle remote queries.
+    ret
+    []))
+
 (defn eager-parser
   "Conforms the whole query - including pull pattern. Takes :read and :mutate keys."
   [{:keys [read mutate]}]
@@ -142,13 +148,16 @@
                                  :mutate mutate)
                       ;; Allow the user to have a pointer to the root parser in the env.
                       (nil? (:parser env))
-                      (assoc :parser self))]
-      (->> (s/conform ::query query)
-           ;; bubble mutations to the top.
-           (sort-by (comp {:mutate 0 :read 1} first))
-           (into {}
-                 (map (partial parse env)))
-           (not-empty)))))
+                      (assoc :parser self))
+          ret (->> (s/conform ::query query)
+               ;; bubble mutations to the top.
+               (sort-by (comp {:mutate 0 :read 1} first))
+               (into {}
+                     (map (partial parse env)))
+               (not-empty))]
+      (cond-> ret
+              (some? (:target env))
+              (targeted-return)))))
 
 (defn- get-name
   "Takes a keyword or a string and returns the string, namespace or the name of it."
@@ -227,12 +236,15 @@
            env (cond-> (assoc env :read read :mutate mutate)
                        ;; Allow the user to have a pointer to the root parser in the env.
                        (nil? (:parser env))
-                       (assoc :parser self))]
-       (->> (s/conform ::l-query query)
-            (sort-by (comp {:mutate 0 :read 1} first))
-            (into {}
-                  (map (partial parse env)))
-            (not-empty))))))
+                       (assoc :parser self))
+           ret (->> (s/conform ::l-query query)
+                    (sort-by (comp {:mutate 0 :read 1} first))
+                    (into {}
+                          (map (partial parse env)))
+                    (not-empty))]
+       (cond-> ret
+               (some? (:target env))
+               (targeted-return))))))
 
 ;; Merging queries
 
