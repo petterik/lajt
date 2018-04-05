@@ -26,21 +26,25 @@
     ([env query]
      (p (assoc env :debug true) query))))
 
-(defn- ->parser []
-  (fn [env query]
-    {:pre [(some? (:reads env))]}
-    (let [read (read/->read-fn (:reads env)
-                               (lajt.read.datascript/db-fns))
-          parser (parser/parser {:read read})]
-      (parser env query))))
+(defn- ->parser
+  ([] (->parser parser/parser))
+  ([parser-fn]
+   (fn [env query]
+     {:pre [(some? (:reads env))]}
+     (let [read (read/->read-fn (:reads env)
+                                (lajt.read.datascript/db-fns))
+           parser (parser-fn {:read read})]
+       (parser env query)))))
 
 (def ^:dynamic *db*)
 (def ^:dynamic *parser*)
 
 (defn setup [test-fn]
-  (binding [*db* (->db)
-            *parser* (->parser)]
-    (test-fn)))
+  (binding [*db* (->db)]
+    (doseq [parser [(->parser parser/parser)
+                    (->parser parser/eager-parser)]]
+      (binding [*parser* parser]
+        (test-fn)))))
 
 (t/use-fixtures :each setup)
 
@@ -313,21 +317,24 @@
            (*parser* {:target :remote
                       :reads  {:read {:remote remote
                                       :params {:remote? (constantly true)}}}}
-                     [:read])))))
+                     [:read]))))
+
+  (testing "includes :depends-on"
+    (is (= [:common-read :read1 :read2]
+          (*parser* {:target :remote
+                     :reads  {:common-read {:remote true}
+                              :read1       {:remote     true
+                                            :depends-on [:common-read]}
+                              :read2       {:remote     true
+                                            :depends-on [:common-read]}}}
+                    [:read1 :read2])))))
 (comment
+
   (do
     (def ^:dynamic *db* (->db))
     (def ^:dynamic *parser* (debug-parser (->parser)))
 
     )
-  (is (= [:read]
-         (*parser* {:target :remote
-                    :reads  {:read {:remote true
-                                    :params {:remote? (constantly true)}}}}
-                   [:read])))
-
-
-
 
 
   )

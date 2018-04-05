@@ -62,20 +62,24 @@
 ;; End lazy query spec.
 
 (defn- handle-target-return [{:keys [target dispatched-by] :as env} k ret]
-  (when (some? ret)
-    (cond
-      (true? ret) (let [unform-key (get-in env [:unform-keys (::type env)])]
-                    [(s/unform unform-key dispatched-by)])
-      (sequential? ret) ret
-      :else
-      (throw
-        (ex-info
-          (str "Unable to handle return from k: " k
-               " with :target " target
-               " return: " ret)
-          {:k      k
-           :ret    ret
-           :target target})))))
+  (let [true->query (fn [x]
+                      (if (true? x)
+                        (let [unform-key (get-in env [:unform-keys (::type env)])]
+                          (s/unform unform-key dispatched-by))
+                        x))]
+    (when (some? ret)
+     (cond
+       (true? ret) (true->query ret)
+       (sequential? ret) (into [] (map true->query) ret)
+       :else
+       (throw
+         (ex-info
+           (str "Unable to handle return from k: " k
+                " with :target " target
+                " return: " ret)
+           {:k      k
+            :ret    ret
+            :target target}))))))
 
 (defn- dispatch [env k expr]
   (let [call-fn (get env (::type env))
@@ -174,7 +178,7 @@
                    (map (partial parse env)))]
       (if (nil? (:target env))
         (not-empty (into {} (remove (comp nil? second)) ret))
-        (into [] cat ret)))))
+        (into [] (comp cat (distinct)) ret)))))
 
 (defn- get-name
   "Takes a keyword or a string and returns the string, namespace or the name of it."
@@ -258,13 +262,12 @@
                     (map (partial parse env)))]
        (when (:debug env)
          (locking *out*
-           (prn "lajt.parser keys: " (into [] (comp (filter (comp keyword? first))
-                                                    (map first))
-                                           ret))
-           (prn "lajt.parser Return (before xform): " ret)))
+           (prn "lajt.parser query: " query)
+           (prn "lajt.parser target: " (:target env))
+           (prn "lajt.parser Return (before xform): " (vec ret))))
        (if (nil? (:target env))
          (not-empty (into {} (remove (comp nil? second)) ret))
-         (into [] cat ret))))))
+         (into [] (comp cat (distinct)) ret))))))
 
 ;; Merging queries
 

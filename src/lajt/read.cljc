@@ -108,10 +108,11 @@
   (let [env (perform-pre-ops env)
         read-map (:read-map env)
         ret (get read-map target)]
-    (when ret
-      (if (true? ret)
-        ret
-        (ops/call-fns ret env)))))
+    (into (vec (:results env))
+          (when ret
+            [(if (true? ret)
+               ret
+               (ops/call-fns ret env))]))))
 
 (defn ->read-fn [lajt-reads db-fns]
   (fn [env k p]
@@ -119,7 +120,7 @@
       (when (and ops/*debug* (nil? (:target env)))
         (locking *out*
           (prn "Calling read: " k)))
-      (let [env (assoc env :params p
+      (let [env (assoc env :read-params p
                            :read-key k
                            :reads lajt-reads
                            :read-map (lajt-reads k)

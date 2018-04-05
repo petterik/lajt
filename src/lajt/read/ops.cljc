@@ -9,14 +9,20 @@
 
 (def ^:dynamic *debug*)
 
+(defn assoc-scoped [env k v]
+  (assoc-in env [k (:read-key env)] v))
+
+(defn get-scoped [env k]
+  (get-in env [k (:read-key env)]))
+
 (defn add-result
   "Adds a result to env. Convenicence function for actions."
   [env res]
-  (assoc-in env [:results  (:read-key env)] res))
+  (assoc-scoped env :results res))
 
 (defn get-result
   [env]
-  (get-in env [:results (:read-key env)]))
+  (get-scoped env :results))
 
 (defn remove-pull [env]
   (update env :read-map dissoc ::pull))
@@ -35,7 +41,9 @@
   [env _ v]
   (let [query (if (fn? v) (v env) v)
         res ((:parser env) env query)
-        env (update env :results merge res)]
+        env (if (some? (:target env))
+              (update env :results (fnil into []) res)
+              (update env :results merge res))]
     ;; Assoc the :depends-on key with all results
     ;; such reads can access it easily.
     (assoc env :depends-on (:results env))))
