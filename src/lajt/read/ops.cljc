@@ -40,13 +40,10 @@
 (defmethod call-op :depends-on
   [env _ v]
   (let [query (if (fn? v) (v env) v)
-        _ (prn "LAJT Executing query: " query)
         res ((:parser env) env query)
-        _ (prn "LAJT Query: " query " gave result: " res)
         env (update env :results merge res)]
     ;; Assoc the :depends-on key with all results
     ;; such reads can access it easily.
-    (prn ":depends-on resu")
     (assoc env :depends-on (:results env))))
 
 (defn call-fns
@@ -331,7 +328,7 @@
      :clj
      (try
        (when *debug*
-         (prn "Entering op: " k))
+         (prn "Entering op: " k " for k: " (:read-key env)))
        (let [ret (call-op env k v)]
          (when *debug*
            (let [[before after] (clojure.data/diff env ret)]

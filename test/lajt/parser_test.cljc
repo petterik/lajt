@@ -208,7 +208,6 @@
               :join-namespace  :join
               :union-namespace :union
               :union-selector  (fn [env k p]
-                                 (prn "in union selector")
-                                 (doto ((:read env) env k p) prn))}]
+                                 ((:read env) env k p))}]
     (is (= [:read-key]
            (parser/dedupe-query conf {} [{:union {:choice [:read-key]}}])))))

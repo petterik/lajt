@@ -192,7 +192,6 @@
      (self (assoc env :target target) query))
     ([env query]
      (s/assert ::query query)
-     (prn "LAJT QUERY: " query)
      (let [read (fn [env k p]
                   (let [[dispatch-key dispatch-val] (:dispatched-by env)]
                     (cond
@@ -225,9 +224,6 @@
                                             p)
                             conformed-union (s/conform (s/coll-of ::l-read-expr :kind vector?)
                                                        (get union-val selected-path))]
-                        (prn "selected-path: " selected-path)
-                        (prn "path: " (get union-val selected-path))
-                        (prn "LAJT conformed-union: " conformed-union)
                         (into {}
                               (map (partial parse (dissoc env :query)))
                               conformed-union))

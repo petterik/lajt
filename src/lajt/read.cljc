@@ -109,7 +109,7 @@
 (defn ->read-fn [lajt-reads db-fns]
   (fn [env k p]
     (binding [ops/*debug* (:debug env false)]
-      (when ops/*debug*
+      (when (and ops/*debug* (nil? (:target env)))
         (prn "Calling read: " k))
       (let [env (assoc env :params p
                            :read-key k
