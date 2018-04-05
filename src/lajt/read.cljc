@@ -77,7 +77,7 @@
   (perform-read* (assoc env :read-map (reads read-key))))
 
 (defn- wrap-query-in-join-ast [env remote-ret]
-  (if-some [->ast (resolve 'om.next.parser.impl/expr->ast)]
+  (if-some [->ast (:om.next.parser.impl/expr->ast env)]
     (let [{:keys [join-namespace]} ((:parser env))
           join-key (keyword (name join-namespace) (name (gensym)))]
       (->ast {join-key remote-ret}))
@@ -117,5 +117,6 @@
                            :db-fns db-fns
                            :read-ops (:read-ops env default-ops))]
         (if-let [remote (:target env)]
-          (get (lajt-reads k) remote)
+          (let [ret (get (lajt-reads k) remote)]
+            (if (fn? ret) (ret env) ret))
           (ops/get-result (perform-read env)))))))

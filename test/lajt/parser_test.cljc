@@ -6,12 +6,14 @@
     [clojure.spec.test.alpha :as st]
     [clojure.spec.gen.alpha :as gen]))
 
-(defn- read-mutate-handler [{:keys [query]} k p]
-  (cond-> {}
-          (some? p)
-          (assoc :params p)
-          (some? query)
-          (assoc :query query)))
+(defn- read-mutate-handler [{:keys [query target]} k p]
+  (if (some? target)
+    true
+    (cond-> {}
+            (some? p)
+            (assoc :params p)
+            (some? query)
+            (assoc :query query))))
 
 (defn- parse-test-query [parser]
   (is (= (parser {} '[:read-key
@@ -36,7 +38,16 @@
            :join/recursive    {:query [:read-key {:recur ...}]}
            mutate-no-params   {}
            mutate-with-params {:params {:param 1}}}))
-  (is (nil? (parser {} []))))
+  (is (nil? (parser {} [])))
+
+  (testing "Reading with :target"
+    (let [query [:some/read
+                 {:join/a [:read-key]}
+                 {:union/a {:a [:read-key]}}
+                 '(mutate!)
+                 '(mutate! {:param 1})]]
+      (is (= (set query)
+             (set (parser {:target :remote} query)))))))
 
 (deftest query-parser-test
   (binding [s/*compile-asserts* true]
