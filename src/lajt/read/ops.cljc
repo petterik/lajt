@@ -85,9 +85,10 @@
     (if-not values-set?
       (do
         (when *debug*
-          (prn "WARN: Not all params were set when executing query: "
-               (:read-key env)
-               " Returning nil."))
+          (locking *out*
+            (prn "WARN: Not all params were set when executing query: "
+                (:read-key env)
+                " Returning nil.")))
         env)
       (let [query (update query :in #(into (vec (or % '[$]))
                                            (keys q-params)))
@@ -328,20 +329,23 @@
      :clj
      (try
        (when *debug*
-         (prn "Entering op: " k " for k: " (:read-key env)))
+         (locking *out*
+           (prn "Entering op: " k " for k: " (:read-key env))))
        (let [ret (call-op env k v)]
          (when *debug*
            (let [[before after] (clojure.data/diff env ret)]
-             (prn {:op     k
-                   :before before
-                   :after  after})))
+             (locking *out*
+               (prn {:op     k
+                     :before before
+                     :after  after}))))
          ret)
        (catch Throwable t
          (when *debug*
-           (prn {:op     k
-                 :before (select-keys env [:read-map :read-key :query])
-                 :after  :exception
-                 :ex     (Throwable->map t)}))
+           (locking *out*
+             (prn {:op     k
+                   :before (select-keys env [:read-map :read-key :query])
+                   :after  :exception
+                   :ex     (Throwable->map t)})))
          (throw t)))))
 
 (comment

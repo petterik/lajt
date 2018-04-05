@@ -252,15 +252,19 @@
          {:query  '{:find  [?name .]
                     :where [[?e :person/first-name ?name]]}
           :params {'?name nil}}
-         :some-params
+         :diana
+         {:query  '{:find  [?name .]
+                    :where [[?e :person/first-name ?name]]}
+          :params {'?name (constantly "Diana")}}
+         :petter
          {:query  '{:find  [?name .]
                     :where [[?e :person/first-name ?name]]}
           :params {'?name (constantly "Petter")}}}]
-    (is (= {:nil-params  nil
-            :some-params "Petter"}
+    (is (= {:diana "Diana"
+            :petter "Petter"}
            (*parser* {:db    *db*
                       :reads reads}
-                     [:nil-params :some-params])))))
+                     [:nil-params :diana :petter])))))
 
 (deftest case-queries
   (let [query {:base {:query '{:find  [?name .]
@@ -315,4 +319,9 @@
                                :where [[?e :person/first-name]]}
                       :after [:result (partial sort-by :person/first-name) reverse]}
                      {:pull [:person/first-name]})))
+
+
+
+
+
   )

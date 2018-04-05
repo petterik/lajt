@@ -256,6 +256,12 @@
            ret (->> (s/conform ::l-query query)
                     (sort-by (comp {:mutate 0 :read 1} first))
                     (map (partial parse env)))]
+       (when (:debug env)
+         (locking *out*
+           (prn "lajt.parser keys: " (into [] (comp (filter (comp keyword? first))
+                                                    (map first))
+                                           ret))
+           (prn "lajt.parser Return (before xform): " ret)))
        (if (nil? (:target env))
          (not-empty (into {} (remove (comp nil? second)) ret))
          (into [] cat ret))))))
