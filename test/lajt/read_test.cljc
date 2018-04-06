@@ -327,7 +327,14 @@
                                             :depends-on [:common-read]}
                               :read2       {:remote     true
                                             :depends-on [:common-read]}}}
-                    [:read1 :read2])))))
+                    [:read1 :read2]))))
+
+  (testing "gets :target from :base even if no :case is true."
+    (is (= [:read1]
+           (*parser* {:target :remote
+                      :reads  {:read1 {:base {:remote true}
+                                       :case [{(constantly false) {}}]}}}
+                     [:read1])))))
 (comment
 
   (do

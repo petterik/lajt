@@ -277,7 +277,7 @@
                                           :case (call-fns
                                                   (s/unform ::fn-calls x)
                                                   env)))))
-                               (every? some?))]
+                               (every? boolean))]
 
                  (when all?
                    (s/unform ::case-val case-val)))))))
@@ -299,11 +299,13 @@
   (merge-query o1 o2))
 
 (defmethod call-op :case
-  [{:keys [read-map] :as env} _ cases]
+  [{:keys [read-map target] :as env} _ cases]
   (let [base (:base read-map)
         match (find-case-match env cases)
         read-map (if (nil? match)
-                   {:no-op nil}
+                   (cond-> {:no-op nil}
+                           (contains? base target)
+                           (assoc target (get base target)))
                    (reduce-kv (fn [m k right]
                                 (if-some [[_ left] (find m k)]
                                   (assoc m k (case-merge k left right))

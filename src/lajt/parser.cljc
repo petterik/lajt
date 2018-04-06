@@ -69,7 +69,7 @@
                         x))]
     (when (some? ret)
      (cond
-       (true? ret) (true->query ret)
+       (true? ret) [(true->query ret)]
        (sequential? ret) (into [] (map true->query) ret)
        :else
        (throw

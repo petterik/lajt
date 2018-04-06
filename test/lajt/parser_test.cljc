@@ -6,6 +6,8 @@
     [clojure.spec.test.alpha :as st]
     [clojure.spec.gen.alpha :as gen]))
 
+(def ^:dynamic *env* {})
+
 (defn- read-mutate-handler [{:keys [query target]} k p]
   (if (some? target)
     true
@@ -16,17 +18,17 @@
             (assoc :query query))))
 
 (defn- parse-test-query [parser]
-  (is (= (parser {} '[:read-key
-                      {:join/a [:read-key]}
-                      {:join/b [{:join/a [:read-key]}]}
-                      {:union/a {:union.a/x [:read-key]
-                                 :union.a/y [{:join/a [:read-key]}]}}
-                      (:read-key2 {:param 1})
-                      ({:join/c [:read-key]} {:param 1})
-                      ({:union/b {:union.b/a [:read-key]}} {:param 1})
-                      (mutate-no-params)
-                      (mutate-with-params {:param 1})
-                      {:join/recursive [:read-key {:recur ...}]}])
+  (is (= (parser *env* '[:read-key
+                         {:join/a [:read-key]}
+                         {:join/b [{:join/a [:read-key]}]}
+                         {:union/a {:union.a/x [:read-key]
+                                    :union.a/y [{:join/a [:read-key]}]}}
+                         (:read-key2 {:param 1})
+                         ({:join/c [:read-key]} {:param 1})
+                         ({:union/b {:union.b/a [:read-key]}} {:param 1})
+                         (mutate-no-params)
+                         (mutate-with-params {:param 1})
+                         {:join/recursive [:read-key {:recur ...}]}])
          '{:read-key          {}
            :join/a            {:query [:read-key]}
            :join/b            {:query [{:join/a [:read-key]}]}
@@ -38,7 +40,7 @@
            :join/recursive    {:query [:read-key {:recur ...}]}
            mutate-no-params   {}
            mutate-with-params {:params {:param 1}}}))
-  (is (nil? (parser {} [])))
+  (is (nil? (parser *env* [])))
 
   ;; TODO: nil results should be removed from the parsed result.
   (testing "Reading with :target"
@@ -48,7 +50,7 @@
                  '(mutate!)
                  '(mutate! {:param 1})]]
       (is (= (set query)
-             (set (parser {:target :remote} query)))))))
+             (set (parser (assoc *env* :target :remote) query)))))))
 
 (defn parsers [conf]
   (mapv #(% conf) [parser/parser parser/eager-parser]))
@@ -65,42 +67,42 @@
                                  (when-not (= k :return-nil)
                                    (read-mutate-handler env k p)))})]
         (is (= {:read-key {}}
-               (parser {} [:read-key :return-nil])))
+               (parser *env* [:read-key :return-nil])))
         ;; TODO: define what happens for mutates.
         ))))
 
 (deftest recursive-dispatch-parsing-test
-  (let [parser (parser/parser {:read                 read-mutate-handler
-                                    :join-namespace  "join"
-                                    :union-namespace "union"
-                                    :union-selector  (fn [{:keys [query]} k p]
-                                                      (assert (contains? query ::selected))
-                                                      ::selected)})]
+  (let [parser (parser/parser {:read            read-mutate-handler
+                               :join-namespace  "join"
+                               :union-namespace "union"
+                               :union-selector  (fn [{:keys [query]} k p]
+                                                  (assert (contains? query ::selected))
+                                                  ::selected)})]
     (testing "joins"
-      (is (= (parser {} [{:join [{:read1 [:a :b]}
-                                 {:read2 [:a :b]}]}
-                         {:join/with-ns [{:read1 [:a]}]}
-                         {:non-recursive [{:read1 [:a :b]}]}
-                         {:non/recursive [:a]}])
-             {:join {:read1 {:query [:a :b]}
-                     :read2 {:query [:a :b]}}
-              :join/with-ns {:read1 {:query [:a]}}
+      (is (= (parser *env* [{:join [{:read1 [:a :b]}
+                                    {:read2 [:a :b]}]}
+                            {:join/with-ns [{:read1 [:a]}]}
+                            {:non-recursive [{:read1 [:a :b]}]}
+                            {:non/recursive [:a]}])
+             {:join          {:read1 {:query [:a :b]}
+                              :read2 {:query [:a :b]}}
+              :join/with-ns  {:read1 {:query [:a]}}
               :non-recursive {:query [{:read1 [:a :b]}]}
               :non/recursive {:query [:a]}})))
 
     (testing "unions"
-      (is (= (parser {} [{:union {::selected [:read1
-                                              {:read2 [:a]}]
-                                  :other [:read]}}
-                         {:union/with-ns {::selected [:read]
-                                          :other [:read]}}
-                         {:custom-union {:a [:read1]
-                                         :b [:read2]}}])
-             {:union {:read1 {}
-                      :read2 {:query [:a]}}
+      (is (= (parser *env* [{:union {::selected [:read1
+                                                 {:read2 [:a]}]
+                                     :other     [:read]}}
+                            {:union/with-ns {::selected [:read]
+                                             :other     [:read]}}
+                            {:custom-union {:a [:read1]
+                                            :b [:read2]}}])
+             {:union         {:read1 {}
+                              :read2 {:query [:a]}}
               :union/with-ns {:read {}}
-              :custom-union {:query {:a [:read1]
-                                     :b [:read2]}}})))))
+              :custom-union  {:query {:a [:read1]
+                                      :b [:read2]}}})))))
 
 (deftest query-merging
   (are [query pattern-map] (= pattern-map
@@ -197,7 +199,7 @@
                                     :union-namespace :union
                                     :union-selector  (constantly ::selected)})]
     (are [query deduped] (= deduped
-                            (parser/dedupe-query parser {} query))
+                            (parser/dedupe-query parser *env* query))
       [{:join [:read]} {:read [:a]}]
       [{:read [:a]}]
 
@@ -232,4 +234,4 @@
               :union-selector  (fn [env k p]
                                  ((:read env) env k p))}]
     (is (= [:read-key]
-           (parser/dedupe-query conf {} [{:union {:choice [:read-key]}}])))))
+           (parser/dedupe-query conf *env* [{:union {:choice [:read-key]}}])))))
