@@ -2,6 +2,7 @@
   (:require
     [clojure.test :as t :refer [deftest is are testing]]
     [lajt.parser :as parser]
+    [lajt.read :as read]
     [clojure.spec.alpha :as s]
     [clojure.spec.test.alpha :as st]
     [clojure.spec.gen.alpha :as gen]))
@@ -53,7 +54,22 @@
              (set (parser (assoc *env* :target :remote) query)))))))
 
 (defn parsers [conf]
-  (mapv #(% conf) [parser/parser parser/eager-parser]))
+  (let [->parser-fns [parser/parser parser/eager-parser]
+        om-next-parsers
+        (->> ->parser-fns
+             (map (fn [->parser]
+                    (->parser
+                      (-> conf
+                          (assoc :om-next? true)
+                          (update :read read/om-next-value-wrapper)
+                          (update :mutate (fn [mutate]
+                                            (fn [env k p]
+                                              (if-some [t (:target env)]
+                                                {t true}
+                                                {:action (constantly
+                                                           (mutate env k p))})))))))))]
+    (-> (mapv #(% conf) ->parser-fns)
+        (into om-next-parsers))))
 
 (deftest query-parser-test
   (binding [s/*compile-asserts* true]
@@ -103,6 +119,18 @@
               :union/with-ns {:read {}}
               :custom-union  {:query {:a [:read1]
                                       :b [:read2]}}})))))
+
+(deftest om-next-integration-test
+  (let [ps (parsers {:read (fn [env k p]
+                             (if-some [t (:target env)]
+                               {t true}
+                               {:value (read-mutate-handler env k p)}))
+                     :mutate (fn [env k p]
+                               (if-some [t (:target env)]
+                                 {t true}
+                                 {:action (constantly ::executed!)}))})]
+    ;; TODO?
+    ))
 
 (deftest query-merging
   (are [query pattern-map] (= pattern-map

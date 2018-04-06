@@ -74,35 +74,27 @@
         env (perform-op env (get-action env))]
     (perform-post-ops env)))
 
-(defn- wrap-query-in-join-ast [env remote-ret]
-  (if-some [->ast (:om.next.parser.impl/expr->ast env)]
-    (let [{:keys [join-namespace]} ((:parser env))
-          join-key (keyword (name join-namespace) (name (gensym)))]
-      (->ast {join-key remote-ret}))
-    (throw (ex-info (str "Must pass :om.next/expr->ast to env when "
-                         "using lajt.read/om-next-value-wrapper.")
-                    {}))))
+(comment
+  ;; This might be useful for some type of integration between om.next and our stuff?
+  (defn- wrap-query-in-join-ast [env remote-ret]
+    (if-some [->ast (:om.next.parser.impl/expr->ast env)]
+      (let [{:keys [join-namespace]} ((:parser env))
+            join-key (keyword (name join-namespace) (name (gensym)))]
+        (->ast {join-key remote-ret}))
+      (throw (ex-info (str "Must pass :om.next/expr->ast to env when "
+                           "using lajt.read/om-next-value-wrapper.")
+                      {})))))
 
 (defn om-next-value-wrapper
   "To use when lajt reads are used together with the om.next parser."
   [read]
   (fn [env k p]
-    (let [ret (read env k p)]
-      (if-some [t (:target env)]
-        (cond
-          (true? ret)
+    (let [ret (read env k p)
+          ret (if (fn? ret) (ret env) ret)]
+      (when (some? ret)
+        (if-some [t (:target env)]
           {t ret}
-          (sequential? ret)
-          {t (wrap-query-in-join-ast env ret)}
-          (fn? ret)
-          {t (wrap-query-in-join-ast env (ret env))}
-          :else
-          (throw (ex-info (str "Unknown return value for read key: " k
-                               " when parser was called with target: " t)
-                          {:read-key k
-                           :target   t
-                           :query    (:query env)})))
-        {:value ret}))))
+          {:value ret})))))
 
 (defn perform-remote [{:keys [target] :as env}]
   (let [env (perform-pre-ops env)

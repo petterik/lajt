@@ -145,15 +145,24 @@
 (defn- union? [env]
   (map? (:query env)))
 
-(defn- targeted-return [ret]
-  (if (some? ret)
-    ;; TODO: Handle remote queries.
-    ret
-    []))
+(defn- unwrap-om-next-read [read]
+  (fn [env k p]
+    (let [ret (read env k p)]
+      (if-some [t (:target env)]
+        (get ret t)
+        (:value ret)))))
+
+(defn- unwrap-om-next-mutate [mutate]
+  (fn [env k p]
+    (let [ret (mutate env k p)]
+      (if-some [t (:target env)]
+        (get ret t)
+        (when-some [a (:action ret)]
+          (a))))))
 
 (defn eager-parser
   "Conforms the whole query - including pull pattern. Takes :read and :mutate keys."
-  [{:keys [read mutate]}]
+  [{:keys [read mutate om-next?]}]
   (fn self [env query]
     (assert-spec ::query query)
     (let [read (fn [{:keys [query] :as env} k p]
@@ -165,8 +174,8 @@
                                    (union? env)
                                    (update :query #(s/unform ::union-map %)))]
                    (read env k p)))
-          env (cond-> (assoc env :read read
-                                 :mutate mutate
+          env (cond-> (assoc env :read (cond-> read om-next? (unwrap-om-next-read))
+                                 :mutate (cond-> mutate om-next? (unwrap-om-next-mutate))
                                  :unform-keys {:read   ::read-expr
                                                :mutate ::mutation-expr})
                       ;; Allow the user to have a pointer to the root parser in the env.
@@ -205,7 +214,7 @@
   Stuff it doesn't parse:
   - Pull patterns of reads.
   - Every branch of an union. Only the selected one(s)."
-  [{:keys [read mutate join-namespace union-namespace union-selector]
+  [{:keys [read mutate join-namespace union-namespace union-selector om-next?]
     :as config}]
   (fn self
     ([] config)
@@ -250,8 +259,9 @@
                               conformed-union))
 
                       :else (read env k p))))
-           env (cond-> (assoc env :read read
-                                  :mutate mutate
+
+           env (cond-> (assoc env :read (cond-> read om-next? (unwrap-om-next-read))
+                                  :mutate (cond-> mutate om-next? (unwrap-om-next-mutate))
                                   :unform-keys {:read   ::l-read-expr
                                                 :mutate ::mutation-expr})
                        ;; Allow the user to have a pointer to the root parser in the env.
@@ -259,15 +269,18 @@
                        (assoc :parser self))
            ret (->> (s/conform ::l-query query)
                     (sort-by (comp {:mutate 0 :read 1} first))
-                    (map (partial parse env)))]
+                    (map (partial parse env)))
+           return (if (nil? (:target env))
+                    (not-empty (into {} (remove (comp nil? second)) ret))
+                    (into [] (comp cat (distinct)) ret))]
        (when (:debug env)
          (locking *out*
            (prn "lajt.parser query: " query)
-           (prn "lajt.parser target: " (:target env))
-           (prn "lajt.parser Return (before xform): " (vec ret))))
-       (if (nil? (:target env))
-         (not-empty (into {} (remove (comp nil? second)) ret))
-         (into [] (comp cat (distinct)) ret))))))
+           (prn "lajt.parser Return (before xform): " (vec ret))
+           (prn "lajt.parser Return (after xform): " return)
+           (prn "lajt.parser target: " (:target env))))
+       return))))
+
 
 ;; Merging queries
 
