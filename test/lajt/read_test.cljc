@@ -338,7 +338,28 @@
            (*parser* {:target :remote
                       :reads  {:read1 {:base {:remote true}
                                        :case [{(constantly false) {}}]}}}
-                     [:read1])))))
+                     [:read1]))))
+  (testing ":target can return a new read to read"
+    (is (= [:read2]
+           (*parser* {:target :remote
+                      :reads  {:read1 {:remote (fn [env] [:read2])}}}
+                     [:read1])))
+    (is (= [{:read2 [:with-query]}]
+           (*parser* {:target :remote
+                      :reads  {:read1 {:remote (fn [env] [{:read2 [:with-query]}])}}}
+                     [:read1])))
+    (is (= ['({:read2 [:read-key]} {:params 1})]
+           (*parser* {:target :remote
+                      :reads  {:read1 {:remote (fn [env]
+                                                 ['({:read2 [:read-key]}
+                                                     {:params 1})])}}}
+                     [:read1])))
+
+    (testing "Can include true"
+      (is (= [:read2 :read1]
+             (*parser* {:target :remote
+                        :reads  {:read1 {:remote (fn [env] [:read2 true])}}}
+                       [:read1]))))))
 (comment
 
   (do
@@ -347,6 +368,8 @@
 
     )
 
+  '(not (= [nil nil] ))
+
+
 
   )
-

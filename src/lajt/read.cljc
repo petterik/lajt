@@ -100,13 +100,13 @@
   (let [env (perform-pre-ops env)
         read-map (:read-map env)
         ret (get read-map target)
-        remote-query? (if (true? ret)
-                        ret
-                        (let [x (ops/call-fns ret env)]
-                          (when x x)))]
-    (cond-> (vec (:results env))
-            remote-query?
-            (conj remote-query?))))
+        ret (cond-> ret
+                    (not (or (boolean? ret) (nil? ret)))
+                    (ops/call-fns env))
+        ret (when ret
+              (cond-> ret (true? ret) vector))
+        deps (:results env)]
+    (into (vec deps) ret)))
 
 (defn ->read-fn [lajt-reads db-fns]
   (fn [env k p]
