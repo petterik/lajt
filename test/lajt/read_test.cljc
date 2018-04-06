@@ -318,6 +318,10 @@
                       :reads  {:read {:remote remote
                                       :params {:remote? (constantly true)}}}}
                      [:read]))))
+  (is (= []
+         (*parser* {:target :remote
+                    :reads  {:read {:remote (constantly false)}}}
+                   [:read])))
 
   (testing "includes :depends-on"
     (is (= [:common-read :read1 :read2]
@@ -345,3 +349,4 @@
 
 
   )
+

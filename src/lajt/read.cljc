@@ -99,12 +99,14 @@
 (defn perform-remote [{:keys [target] :as env}]
   (let [env (perform-pre-ops env)
         read-map (:read-map env)
-        ret (get read-map target)]
-    (into (vec (:results env))
-          (when ret
-            [(if (true? ret)
-               ret
-               (ops/call-fns ret env))]))))
+        ret (get read-map target)
+        remote-query? (if (true? ret)
+                        ret
+                        (let [x (ops/call-fns ret env)]
+                          (when x x)))]
+    (cond-> (vec (:results env))
+            remote-query?
+            (conj remote-query?))))
 
 (defn ->read-fn [lajt-reads db-fns]
   (fn [env k p]
