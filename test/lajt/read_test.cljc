@@ -331,7 +331,14 @@
                                             :depends-on [:common-read]}
                               :read2       {:remote     true
                                             :depends-on [:common-read]}}}
-                    [:read1 :read2]))))
+                    [:read1 :read2])))
+
+    (is (= [{:dep [:read-key]}]
+           (*parser* {:target :remote
+                      :reads  {:dep {:remote true}
+                               :read1       {:remote     false
+                                             :depends-on [{:dep [:read-key]}]}}}
+                     [:read1]))))
 
   (testing "gets :target from :base even if no :case is true."
     (is (= [:read1]
@@ -367,9 +374,5 @@
     (def ^:dynamic *parser* (debug-parser (->parser)))
 
     )
-
-  '(not (= [nil nil] ))
-
-
 
   )
