@@ -145,13 +145,6 @@
   {:before identity-plugin
    :after identity-plugin})
 
-(defn map->plugin [m]
-  (fn
-    ([env k p]
-     ((:before m identity-plugin) env k p))
-    ([env k p ret]
-      (:after m identity-plugin) env k p ret)))
-
 (def unwrap-om-next-read-plugin
   {:after (fn [env k p ret]
             (if-some [t (:target env)]
@@ -164,21 +157,6 @@
               (get ret t)
               (when-some [a (:action ret)]
                 (a))))})
-
-(defn- unwrap-om-next-read [read]
-  (fn [env k p]
-    (let [ret (read env k p)]
-      (if-some [t (:target env)]
-        (get ret t)
-        (:value ret)))))
-
-(defn- unwrap-om-next-mutate [mutate]
-  (fn [env k p]
-    (let [ret (mutate env k p)]
-      (if-some [t (:target env)]
-        (get ret t)
-        (when-some [a (:action ret)]
-          (a))))))
 
 ;; query->parsed-query?
 ;; where parsed-query is:
@@ -291,16 +269,22 @@
     ([env query]
      (assert-spec ::query query)
       ;; TODO: Replace all this read wrapping with plugins.
-     (let [env (-> (assoc env ::config config
-                              ::root-query-plugin eager-query-parser-plugin
-                              :read (cond-> read om-next? (unwrap-om-next-read))
-                              :mutate (cond-> mutate om-next? (unwrap-om-next-mutate))
-                              :unform-keys {:read   ::read-expr
-                                            :mutate ::mutation-expr})
-                   (cond->
-                     ;; Allow the user to have a pointer to the root parser in the env.
-                     (nil? (:parser env))
-                     (assoc :parser self)))]
+     (let [env (cond-> (assoc env ::config config
+                                  ::initialized? true
+                                  ::root-query-plugin eager-query-parser-plugin
+                                  :read read
+                                  :mutate mutate
+                                  :unform-keys {:read   ::read-expr
+                                                :mutate ::mutation-expr})
+                       (not (::initialized? env))
+                       (-> (update ::read-plugins vec)
+                           (cond-> om-next?
+                                   (-> (update ::read-plugins conj unwrap-om-next-read-plugin)
+                                       (update ::mutate-plugins conj unwrap-om-next-mutate-plugin)))
+                           ;; Allow the user to have a pointer to the root parser in the env.
+                           (cond->
+                             (nil? (:parser env))
+                             (assoc :parser self))))]
        (->> query
             (parse-query env)
             (call-parsed-query env))))))
@@ -389,19 +373,24 @@
     ([env query]
      (s/assert ::query query)
      (let [env (cond-> (assoc env ::config config
+                                  ::initialized? true
                                   ::root-query-plugin lazy-query-parser-plugin
-                                  :read (cond-> read om-next? (unwrap-om-next-read))
-                                  :mutate (cond-> mutate om-next? (unwrap-om-next-mutate))
+                                  :read read
+                                  :mutate mutate
                                   :unform-keys {:read   ::l-read-expr
                                                 :mutate ::mutation-expr})
-                       :always
-                       (update ::read-plugins (fnil into [])
-                               [(recursively-call-joins-plugin join-namespace)
-                                (selects-and-calls-union-plugin union-namespace
-                                                                union-selector)])
-                       ;; Allow the user to have a pointer to the root parser in the env.
-                       (nil? (:parser env))
-                       (assoc :parser self))
+                       (not (::initialized? env))
+                       (-> (update ::read-plugins vec)
+                           (update ::read-plugins into
+                                   [(recursively-call-joins-plugin join-namespace)
+                                    (selects-and-calls-union-plugin union-namespace
+                                                                    union-selector)])
+                           (cond-> om-next?
+                                   (-> (update ::read-plugins conj unwrap-om-next-read-plugin)
+                                       (update ::mutate-plugins conj unwrap-om-next-mutate-plugin)))
+                           ;; Allow the user to have a pointer to the root parser in the env.
+                           (cond-> (nil? (:parser env))
+                                   (assoc :parser self))))
            return (->> query
                        (parse-query env)
                        (call-parsed-query env))]

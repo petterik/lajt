@@ -7,8 +7,6 @@
     [clojure.spec.test.alpha :as st]
     [clojure.spec.gen.alpha :as gen]))
 
-(def ^:dynamic *env* {})
-
 (defn- read-mutate-handler [{:keys [query target]} k p]
   (if (some? target)
     true
@@ -18,42 +16,44 @@
             (some? query)
             (assoc :query query))))
 
-(defn- parse-test-query [parser]
-  (is (= (parser *env* '[:read-key
-                         {:join/a [:read-key]}
-                         {:join/b [{:join/a [:read-key]}]}
-                         {:union/a {:union.a/x [:read-key]
-                                    :union.a/y [{:join/a [:read-key]}]}}
-                         (:read-key2 {:param 1})
-                         ({:join/c [:read-key]} {:param 1})
-                         ({:union/b {:union.b/a [:read-key]}} {:param 1})
-                         (mutate-no-params)
-                         (mutate-with-params {:param 1})
-                         {:join/recursive [:read-key {:recur ...}]}])
-         '{:read-key          {}
-           :join/a            {:query [:read-key]}
-           :join/b            {:query [{:join/a [:read-key]}]}
-           :union/a           {:query {:union.a/x [:read-key]
-                                       :union.a/y [{:join/a [:read-key]}]}}
-           :read-key2         {:params {:param 1}}
-           :join/c            {:query [:read-key] :params {:param 1}}
-           :union/b           {:query {:union.b/a [:read-key]} :params {:param 1}}
-           :join/recursive    {:query [:read-key {:recur ...}]}
-           mutate-no-params   {}
-           mutate-with-params {:params {:param 1}}}))
-  (is (nil? (parser *env* [])))
+(def ^:dynamic *env* {})
+(def ^:dynamic *parser* nil)
 
-  ;; TODO: nil results should be removed from the parsed result.
-  (testing "Reading with :target"
-    (let [query [:some/read
-                 {:join/a [:read-key]}
-                 {:union/a {:a [:read-key]}}
-                 '(mutate!)
-                 '(mutate! {:param 1})]]
-      (is (= (set query)
-             (set (parser (assoc *env* :target :remote) query)))))))
+(defn ->parser [parser-fn]
+  (fn [env query & [target]]
+    (let [parser (parser-fn (merge
+                              {:read   read-mutate-handler
+                               :mutate read-mutate-handler}
+                              env))]
+      (parser env query target))))
 
-(defn parsers [conf]
+(def om-next-mutate-wrapper
+  (fn [mutate]
+    (fn [env k p]
+      (if-some [t (:target env)]
+        {t true}
+        {:action (constantly
+                   (mutate env k p))}))))
+
+(defn setup [test-fn]
+  (let [parser-fns [parser/parser parser/eager-parser]
+        om-next-parser-fns
+        (map (fn [parser-fn]
+               (fn [config]
+                 (parser-fn
+                   (-> config
+                       (assoc :om-next? true)
+                       (update :read read/om-next-value-wrapper)
+                       (update :mutate om-next-mutate-wrapper)))))
+             parser-fns)]
+    (doseq [parser-fn (concat parser-fns om-next-parser-fns)]
+      (binding [*parser* (->parser parser-fn)
+                s/*compile-asserts* true]
+        (test-fn)))))
+
+(t/use-fixtures :each setup)
+
+#_(defn parsers [conf]
   (let [->parser-fns [parser/parser
                       parser/eager-parser]
         om-next-parsers
@@ -73,20 +73,48 @@
         (into om-next-parsers))))
 
 (deftest query-parser-test
-  (binding [s/*compile-asserts* true]
-    (doseq [parser (parsers {:mutate read-mutate-handler
-                             :read   read-mutate-handler})]
-      (parse-test-query parser))
+  (is (= (*parser* *env* '[:read-key
+                           {:join/a [:read-key]}
+                           {:join/b [{:join/a [:read-key]}]}
+                           {:union/a {:union.a/x [:read-key]
+                                      :union.a/y [{:join/a [:read-key]}]}}
+                           (:read-key2 {:param 1})
+                           ({:join/c [:read-key]} {:param 1})
+                           ({:union/b {:union.b/a [:read-key]}} {:param 1})
+                           (mutate-no-params)
+                           (mutate-with-params {:param 1})
+                           {:join/recursive [:read-key {:recur ...}]}])
+         '{:read-key          {}
+           :join/a            {:query [:read-key]}
+           :join/b            {:query [{:join/a [:read-key]}]}
+           :union/a           {:query {:union.a/x [:read-key]
+                                       :union.a/y [{:join/a [:read-key]}]}}
+           :read-key2         {:params {:param 1}}
+           :join/c            {:query [:read-key] :params {:param 1}}
+           :union/b           {:query {:union.b/a [:read-key]} :params {:param 1}}
+           :join/recursive    {:query [:read-key {:recur ...}]}
+           mutate-no-params   {}
+           mutate-with-params {:params {:param 1}}}))
+  (is (nil? (*parser* *env* [])))
 
-    (testing "removes key when parser read returns nil."
-      (doseq [parser (parsers {:read
-                               (fn [env k p]
-                                 (when-not (= k :return-nil)
-                                   (read-mutate-handler env k p)))})]
-        (is (= {:read-key {}}
-               (parser *env* [:read-key :return-nil])))
-        ;; TODO: define what happens for mutates.
-        ))))
+  ;; TODO: nil results should be removed from the parsed result.
+  (testing "Reading with :target"
+    (let [query [:some/read
+                 {:join/a [:read-key]}
+                 {:union/a {:a [:read-key]}}
+                 '(mutate!)
+                 '(mutate! {:param 1})]]
+      (is (= (set query)
+             (set (*parser* *env* query :remote))))))
+
+  (testing "removes key when parser read returns nil."
+    (is (= {:read-key {}}
+           (*parser* {:read (fn [env k p]
+                              (when-not (= k :return-nil)
+                                (read-mutate-handler env k p)))}
+                   [:read-key :return-nil])))
+    ;; TODO: define what happens for mutates.
+    ))
 
 (deftest recursive-dispatch-parsing-test
   (let [parser (parser/parser {:read            read-mutate-handler
@@ -122,10 +150,10 @@
                                       :b [:read2]}}})))))
 
 (deftest om-next-integration-test
-  (let [ps (parsers {:read (fn [env k p]
-                             (if-some [t (:target env)]
-                               {t true}
-                               {:value (read-mutate-handler env k p)}))
+  #_(let [ps (parsers {:read   (fn [env k p]
+                               (if-some [t (:target env)]
+                                 {t true}
+                                 {:value (read-mutate-handler env k p)}))
                      :mutate (fn [env k p]
                                (if-some [t (:target env)]
                                  {t true}
@@ -264,3 +292,30 @@
     (is (= [:read-key]
            (parser/dedupe-query conf *env* [{:union {:choice [:read-key]}}])))))
 
+(deftest initializing-parser-plugins-once
+  (let [state (atom 0)
+        plugin {:before (fn [env k p]
+                          (swap! state inc)
+                          env)}]
+    (*parser* (assoc *env* ::parser/read-plugins [plugin]
+                           :join-namespace "join")
+              [{:join [:read1 :read2 :read3]}])
+    (is (contains? #{1 4} @state)))
+  (let [state (atom 0)
+        orig parser/recursively-call-joins-plugin]
+    (with-redefs [parser/recursively-call-joins-plugin
+                  (fn [namespaces]
+                    {:before (fn [env k p]
+                               (swap! state inc)
+                               ((:before (orig namespaces)) env k p))})]
+      (*parser* (assoc *env* :join-namespace "join")
+                [{:join [:read1 :read2 :read3]}])
+      ;; It'll be 0 for the eager-parser and 4 for the parser
+      (is (contains? #{0 4} @state)))))
+
+
+(comment
+  (def ^:dynamic *parser* (->parser parser/parser))
+
+
+  )

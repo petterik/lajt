@@ -41,7 +41,7 @@
 
 (defn setup [test-fn]
   (binding [*db* (->db)]
-    (doseq [parser [#_(->parser parser/parser)
+    (doseq [parser [(->parser parser/parser)
                     (->parser parser/eager-parser)]]
       (binding [*parser* parser]
         (test-fn)))))
