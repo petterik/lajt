@@ -41,7 +41,7 @@
 
 (defn setup [test-fn]
   (binding [*db* (->db)]
-    (doseq [parser [(->parser parser/parser)
+    (doseq [parser [#_(->parser parser/parser)
                     (->parser parser/eager-parser)]]
       (binding [*parser* parser]
         (test-fn)))))
@@ -374,5 +374,6 @@
     (def ^:dynamic *parser* (debug-parser (->parser)))
 
     )
+  (clojure.spec.test.alpha/unstrument)
 
   )

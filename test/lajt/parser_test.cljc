@@ -54,7 +54,8 @@
              (set (parser (assoc *env* :target :remote) query)))))))
 
 (defn parsers [conf]
-  (let [->parser-fns [parser/parser parser/eager-parser]
+  (let [->parser-fns [parser/parser
+                      parser/eager-parser]
         om-next-parsers
         (->> ->parser-fns
              (map (fn [->parser]
@@ -222,10 +223,10 @@
                     {k v})))))))
 
 (deftest dedupe-query-test
-  (let [parser (parser/parser {:read                 read-mutate-handler
-                                    :join-namespace  :join
-                                    :union-namespace :union
-                                    :union-selector  (constantly ::selected)})]
+  (let [parser (parser/parser {:read            read-mutate-handler
+                               :join-namespace  :join
+                               :union-namespace :union
+                               :union-selector  (constantly ::selected)})]
     (are [query deduped] (= deduped
                             (parser/dedupe-query parser *env* query))
       [{:join [:read]} {:read [:a]}]
@@ -255,11 +256,11 @@
     ))
 
 (deftest dispatch-old-read-test
-  (let [read (fn [env k p] :choice)
-        conf {:read            read
+  (let [conf {:read            (fn [env k p] :choice)
               :join-namespace  :join
               :union-namespace :union
               :union-selector  (fn [env k p]
                                  ((:read env) env k p))}]
     (is (= [:read-key]
            (parser/dedupe-query conf *env* [{:union {:choice [:read-key]}}])))))
+

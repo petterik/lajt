@@ -81,15 +81,12 @@
             :ret    ret
             :target target}))))))
 
-(defn- dispatch [env k expr]
-  (let [call-fn (get env (::type env))
-        env (assoc env :dispatched-by expr)
-        ret (call-fn env k (:params env))]
-    (if (nil? (:target env))
-      ;; Returning a pair that can be conjed into a {}.
-      [k ret]
-      ;; Handle reads with target
-      (handle-target-return env k ret))))
+(defn- query-fragment [env k expr]
+  {::type   (::type env)
+   ::key    k
+   ::params (:params env)
+   ::query  (:query env)
+   ::expr   expr})
 
 (defmulti parse (fn [env expr] (first expr)))
 (defmethod parse :default
@@ -102,30 +99,30 @@
 
 (defmethod parse :id
   [env [_ k :as expr]]
-  (dispatch (assoc env :query nil)
-            k
-            expr))
+  (query-fragment (assoc env :query nil)
+                  k
+                  expr))
 
 (defmethod parse :join
   [env [_ m :as expr]]
   (let [[k [expr-type v]] (first m)]
-    (dispatch (assoc env :query v)
-              k
-              expr)))
+    (query-fragment (assoc env :query v)
+                    k
+                    expr)))
 
 (defmethod parse :union
   [env [_ m :as expr]]
   (let [[k v] (first m)]
     ;; Maybe lazily conform/unform ::unions and maybe even ::joins?
-    (dispatch (assoc env :query v)
-              k
-              expr)))
+    (query-fragment (assoc env :query v)
+                    k
+                    expr)))
 
 (defmethod parse :mutate
   [env [_ {:keys [id params] :as expr}]]
-  (dispatch (assoc env ::type :mutate :params params)
-            id
-            expr))
+  (query-fragment (assoc env ::type :mutate :params params)
+                  id
+                  expr))
 
 (defmethod parse :param-expr
   [env [_ {:keys [expr params]}]]
@@ -139,11 +136,34 @@
                (str "Spec assertion failed\n" (with-out-str (s/explain-out ed)))
                ed)))))
 
-(defn- join? [env]
-  (vector? (:query env)))
+(def identity-plugin
+  (fn
+    ([env k p] env)
+    ([env k p ret] ret)))
 
-(defn- union? [env]
-  (map? (:query env)))
+(def identity-plugin-map
+  {:before identity-plugin
+   :after identity-plugin})
+
+(defn map->plugin [m]
+  (fn
+    ([env k p]
+     ((:before m identity-plugin) env k p))
+    ([env k p ret]
+      (:after m identity-plugin) env k p ret)))
+
+(def unwrap-om-next-read-plugin
+  {:after (fn [env k p ret]
+            (if-some [t (:target env)]
+              (get ret t)
+              (:value ret)))})
+
+(def unwrap-om-next-mutate-plugin
+  {:after (fn [env k p ret]
+            (if-some [t (:target env)]
+              (get ret t)
+              (when-some [a (:action ret)]
+                (a))))})
 
 (defn- unwrap-om-next-read [read]
   (fn [env k p]
@@ -160,34 +180,130 @@
         (when-some [a (:action ret)]
           (a))))))
 
+;; query->parsed-query?
+;; where parsed-query is:
+(s/def ::type #{:read :mutate})
+(s/def ::key (s/or :read keyword?
+                   :mutate symbol?))
+(s/def ::expr (s/or :read ::read-expr
+                    :mutate ::mutation-expr))
+(s/def ::params map?)
+(s/def ::parsed-query-fragment (s/keys :req [::type ::key]
+                                       :opt [::params ::query ::expr]))
+(s/def ::parsed-query (s/coll-of ::parsed-query-fragment :kind vector?))
+
+(defn- run-query-plugins [env query]
+  (reduce (fn [query plugin]
+            (plugin env query))
+          query
+          (cons (::root-query-plugin env) (::query-plugins env))))
+
+(defn- parse-query [env query]
+  (->> query
+       (run-query-plugins env)
+       (sort-by (comp {:mutate 0 :read 1} ::type))
+       (vec)))
+
+(s/def ::query-plugin (s/fspec :args (s/cat :env map? :query ::parsed-query)
+                               :ret ::parsed-query))
+(s/def ::query-plugins (s/+ ::query-plugin))
+(s/def ::config (s/keys :req-un [::read ::mutate]
+                        :opt-un [::join-namespace ::union-namespace ::union-selector]))
+(s/def ::env (s/keys :req-un [::unform-keys]
+                     :opt [::config ::query-plugins]))
+(s/fdef parse-query
+        :args (s/cat :env ::env
+                     :conformed-query ::query)
+        :ret ::parsed-query)
+
+(defn with-plugins-middleware [parse-type plugins-key]
+  (fn [env k p]
+    (let [plugins (get env plugins-key)
+          env (transduce (keep :before)
+                          (completing
+                            (fn [env plugin]
+                              (plugin env k (::params env))))
+                          (assoc env ::params p)
+                          plugins)
+          val ((get env parse-type) env k (::params env))]
+      (transduce (keep :after)
+                 (completing
+                   (fn [env plugin]
+                     (->> (plugin env k (::params env) (::return env))
+                          (assoc env ::return)))
+                   ::return)
+                 (assoc env ::return val)
+                 plugins))))
+
+(def type->call-fn {:read   (with-plugins-middleware :read ::read-plugins)
+                    :mutate (with-plugins-middleware :mutate ::mutate-plugins)})
+
+(defn call-parsed-query [env query]
+  (let [xf (map (fn [{::keys [type expr params key query]}]
+                  (let [call-fn (type->call-fn type)
+                        env (assoc env :dispatched-by expr
+                                       :query query
+                                       ::type type
+                                       ::params params)
+                        ret (call-fn env key params)]
+                    ;; TODO: Could this be plugins?
+                    (if (nil? (:target env))
+                      ;; Returning a pair that can be conjed into a {}.
+                      [key ret]
+                      ;; Handle reads with target
+                      (handle-target-return env key ret)))))]
+    (if (nil? (:target env))
+      (->> query
+           (into {} (comp xf (remove (comp nil? second))))
+           (not-empty))
+      (->> query
+           (into []
+                 (comp xf cat (distinct)))))))
+
+(def eager-query-parser-plugin
+  (fn [env query]
+    (->> (s/conform ::query query)
+         (eduction
+           (map (partial parse env))
+           (map (fn [{::keys [query expr] :as fragment}]
+                  (cond-> fragment
+                          (some? query)
+                          ;; unform some how.
+                          (cond->
+                            (= :join (first expr))
+                            (update ::query #(s/unform ::read-exprs %))
+                            (= :union (first expr))
+                            (update ::query #(s/unform ::union-map %))))))))))
+
+(def lazy-query-parser-plugin
+  (fn [env query]
+    (eduction
+      (map (partial parse env))
+      (s/conform ::l-query query))))
+
 (defn eager-parser
   "Conforms the whole query - including pull pattern. Takes :read and :mutate keys."
-  [{:keys [read mutate om-next?]}]
-  (fn self [env query]
-    (assert-spec ::query query)
-    (let [read (fn [{:keys [query] :as env} k p]
-                 ;; Since this parser conforms the whole query at once, we want to
-                 ;; unform the :query before calling read.
-                 (let [env (cond-> env
-                                   (join? env)
-                                   (update :query #(s/unform ::read-exprs %))
-                                   (union? env)
-                                   (update :query #(s/unform ::union-map %)))]
-                   (read env k p)))
-          env (cond-> (assoc env :read (cond-> read om-next? (unwrap-om-next-read))
-                                 :mutate (cond-> mutate om-next? (unwrap-om-next-mutate))
-                                 :unform-keys {:read   ::read-expr
-                                               :mutate ::mutation-expr})
-                      ;; Allow the user to have a pointer to the root parser in the env.
-                      (nil? (:parser env))
-                      (assoc :parser self))
-          ret (->> (s/conform ::query query)
-                   ;; bubble mutations to the top.
-                   (sort-by (comp {:mutate 0 :read 1} first))
-                   (map (partial parse env)))]
-      (if (nil? (:target env))
-        (not-empty (into {} (remove (comp nil? second)) ret))
-        (into [] (comp cat (distinct)) ret)))))
+  [{:keys [read mutate om-next?] :as config}]
+  (fn self
+    ([] config)
+    ([env query target]
+     (self (assoc env :target target) query))
+    ([env query]
+     (assert-spec ::query query)
+      ;; TODO: Replace all this read wrapping with plugins.
+     (let [env (-> (assoc env ::config config
+                              ::root-query-plugin eager-query-parser-plugin
+                              :read (cond-> read om-next? (unwrap-om-next-read))
+                              :mutate (cond-> mutate om-next? (unwrap-om-next-mutate))
+                              :unform-keys {:read   ::read-expr
+                                            :mutate ::mutation-expr})
+                   (cond->
+                     ;; Allow the user to have a pointer to the root parser in the env.
+                     (nil? (:parser env))
+                     (assoc :parser self)))]
+       (->> query
+            (parse-query env)
+            (call-parsed-query env))))))
 
 (defn- get-name
   "Takes a keyword or a string and returns the string, namespace or the name of it."
@@ -196,6 +312,56 @@
     k
     (or (namespace k)
         (name k))))
+
+(defn- name-set [names]
+  (when (some? names)
+    (into #{}
+          (map get-name)
+          (cond-> names (not (coll? names)) vector))))
+
+(defn recursively-call-joins-plugin [join-namespaces]
+  (let [join-namespaces (name-set join-namespaces)]
+    (if (empty? join-namespaces)
+      identity-plugin-map
+      {:before
+       (fn [env k p]
+         (let [[dispatch-key dispatch-val] (:dispatched-by env)]
+           (if-not (and (= :join dispatch-key)
+                        (contains? join-namespaces (get-name k)))
+             env
+             (let [[_ [_ join-val]] (first dispatch-val)
+                   conformed-join join-val]
+               (assoc env :read (fn [env k p]
+                                  ((:parser env) env conformed-join)))))))})))
+
+(defn selects-and-calls-union-plugin [union-namespaces union-selector]
+  (let [union-namespaces (name-set union-namespaces)]
+    (if (empty? union-namespaces)
+      identity-plugin-map
+      {:before
+       (fn [env k p]
+         (let [[dispatch-key dispatch-val] (:dispatched-by env)]
+           (if-not (and (= :union dispatch-key)
+                        (contains? union-namespaces (get-name k)))
+             env
+             (let [[_ union-val] (first dispatch-val)
+                   _ (when (nil? union-selector)
+                       (throw (ex-info "Dispatching on union-namespace but :union-selector was nil!"
+                                       {:key           k
+                                        :dispatched-by (:dispatched-by env)})))
+                   selected-path (union-selector
+                                   ;; Assoc the initial read function (not this one)
+                                   ;; Such that the union selector can dispatch
+                                   ;; to the read function.
+                                   ;; TODO: Remove this hack. :read should not be
+                                   ;; exposed in ::config ?
+                                   (assoc env :read (:read (::config env))
+                                              ::calling-union-selector true)
+                                   k
+                                   p)
+                   conformed-union (get union-val selected-path)]
+               (assoc env :read (fn [env k p]
+                                  ((:parser env) env conformed-union)))))))})))
 
 (defn parser
   "Like parser, but parses unions and joins lazily and more effectively.
@@ -222,62 +388,27 @@
      (self (assoc env :target target) query))
     ([env query]
      (s/assert ::query query)
-     (let [read (fn [env k p]
-                  (let [[dispatch-key dispatch-val] (:dispatched-by env)]
-                    (cond
-                      (and (= :join dispatch-key)
-                           (some? join-namespace)
-                           (= (get-name join-namespace)
-                              (get-name k)))
-                      (let [[_ [_ join-val]] (first dispatch-val)
-                            conformed (s/conform (s/coll-of ::l-read-expr :kind vector?) join-val)]
-                        (into {}
-                              (map (partial parse (dissoc env :query)))
-                              conformed))
-
-                      (and (= :union dispatch-key)
-                           (some? union-namespace)
-                           (= (get-name union-namespace)
-                              (get-name k)))
-                      (let [[_ union-val] (first dispatch-val)
-                            _ (when (nil? union-selector)
-                                (throw (ex-info "Dispatching on union-namespace but :union-selector was nil!"
-                                                {:key           k
-                                                 :dispatched-by (:dispatched-by env)})))
-                            selected-path (union-selector
-                                            ;; Assoc the initial read function (not this one)
-                                            ;; Such that the union selector can dispatch
-                                            ;; to the read function.
-                                            (assoc env :read read
-                                                       ::calling-union-selector true)
-                                            k
-                                            p)
-                            conformed-union (s/conform (s/coll-of ::l-read-expr :kind vector?)
-                                                       (get union-val selected-path))]
-                        (into {}
-                              (map (partial parse (dissoc env :query)))
-                              conformed-union))
-
-                      :else (read env k p))))
-
-           env (cond-> (assoc env :read (cond-> read om-next? (unwrap-om-next-read))
+     (let [env (cond-> (assoc env ::config config
+                                  ::root-query-plugin lazy-query-parser-plugin
+                                  :read (cond-> read om-next? (unwrap-om-next-read))
                                   :mutate (cond-> mutate om-next? (unwrap-om-next-mutate))
                                   :unform-keys {:read   ::l-read-expr
                                                 :mutate ::mutation-expr})
+                       :always
+                       (update ::read-plugins (fnil into [])
+                               [(recursively-call-joins-plugin join-namespace)
+                                (selects-and-calls-union-plugin union-namespace
+                                                                union-selector)])
                        ;; Allow the user to have a pointer to the root parser in the env.
                        (nil? (:parser env))
                        (assoc :parser self))
-           ret (->> (s/conform ::l-query query)
-                    (sort-by (comp {:mutate 0 :read 1} first))
-                    (map (partial parse env)))
-           return (if (nil? (:target env))
-                    (not-empty (into {} (remove (comp nil? second)) ret))
-                    (into [] (comp cat (distinct)) ret))]
+           return (->> query
+                       (parse-query env)
+                       (call-parsed-query env))]
        (when (:debug env)
          (locking *out*
            (prn "lajt.parser query: " query)
-           (prn "lajt.parser Return (before xform): " (vec ret))
-           (prn "lajt.parser Return (after xform): " return)
+           (prn "lajt.parser Return: " return)
            (prn "lajt.parser target: " (:target env))))
        return))))
 
