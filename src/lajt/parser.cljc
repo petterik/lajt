@@ -170,17 +170,11 @@
                                        :opt [::params ::query ::expr]))
 (s/def ::parsed-query (s/coll-of ::parsed-query-fragment :kind vector?))
 
-(defn- run-query-plugins [env query]
+(defn- parse-query [env query]
   (reduce (fn [query plugin]
             (plugin env query))
           query
           (::query-plugins env)))
-
-(defn- parse-query [env query]
-  (->> query
-       (run-query-plugins env)
-       (sort-by (comp {:mutate 0 :read 1} ::type))
-       (vec)))
 
 (s/def ::query-plugin (s/fspec :args (s/cat :env map? :query ::parsed-query)
                                :ret ::parsed-query))
@@ -191,7 +185,7 @@
                      :opt [::config ::query-plugins]))
 (s/fdef parse-query
         :args (s/cat :env ::env
-                     :conformed-query ::query)
+                     :query ::query)
         :ret ::parsed-query)
 
 (defn with-plugins-middleware [parse-type plugins-key]
@@ -213,9 +207,6 @@
                  (assoc env ::return val)
                  plugins))))
 
-(def type->call-fn {:read   (with-plugins-middleware :read ::read-plugins)
-                    :mutate (with-plugins-middleware :mutate ::mutate-plugins)})
-
 (def handle-read-mutate-return-plugin
   {:after
    (fn [env k p ret]
@@ -225,20 +216,24 @@
        ;; Handle reads with target
        (handle-target-return env k ret)))})
 
-(defn call-parsed-query [env query]
-  (let [xf (map (fn [{::keys [type expr params key query]}]
-                  (let [env (assoc env :dispatched-by expr
-                                       :query query
-                                       ::type type
-                                       ::params params)]
-                    ((type->call-fn type) env key params))))]
-    (if (nil? (:target env))
-      (->> query
-           (into {} (comp xf (remove (comp nil? second))))
-           (not-empty))
-      (->> query
-           (into []
-                 (comp xf cat (distinct)))))))
+(def parsed-query->run-pluggins->returning-result
+  (let [type->call-fn {:read   (with-plugins-middleware :read ::read-plugins)
+                       :mutate (with-plugins-middleware :mutate ::mutate-plugins)}]
+    (fn [env query]
+      (let [xf (map (fn [{::keys [type expr params key query]}]
+                      (let [env (assoc env :dispatched-by expr
+                                           :query query
+                                           ::type type
+                                           ::params params)]
+                        ((type->call-fn type) env key params))))
+            query (vec (sort-by (comp {:mutate 0 :read 1} ::type) query))]
+        (if (nil? (:target env))
+          (->> query
+               (into {} (comp xf (remove (comp nil? second))))
+               (not-empty))
+          (->> query
+               (into []
+                     (comp xf cat (distinct)))))))))
 
 (def eager-query-parser-plugin
   (fn [env query]
@@ -289,14 +284,13 @@
                                                         [unwrap-om-next-mutate-plugin])
                                                       [handle-read-mutate-return-plugin])
                              ::query-plugins (concat query-plugins
-                                                     [eager-query-parser-plugin])))
+                                                     [eager-query-parser-plugin
+                                                      parsed-query->run-pluggins->returning-result])))
                    ;; Allow the user to have a pointer to the root parser in the env.
                    (cond->
                      (nil? (:parser env))
                      (assoc :parser self)))]
-       (->> query
-            (parse-query env)
-            (call-parsed-query env))))))
+       (parse-query env query)))))
 
 (defn- get-name
   "Takes a keyword or a string and returns the string, namespace or the name of it."
@@ -402,13 +396,12 @@
                                                         [unwrap-om-next-mutate-plugin])
                                                       [handle-read-mutate-return-plugin])
                              ::query-plugins (concat query-plugins
-                                                     [lazy-query-parser-plugin])))
+                                                     [lazy-query-parser-plugin
+                                                      parsed-query->run-pluggins->returning-result])))
                    ;; Allow the user to have a pointer to the root parser in the env.
                    (cond-> (nil? (:parser env))
                            (assoc :parser self)))
-           return (->> query
-                       (parse-query env)
-                       (call-parsed-query env))]
+           return (parse-query env query)]
        (when (:debug env)
          (locking *out*
            (prn "lajt.parser query: " query)
