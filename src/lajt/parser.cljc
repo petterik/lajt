@@ -61,26 +61,6 @@
 
 ;; End lazy query spec.
 
-(defn- handle-target-return [{:keys [target dispatched-by] :as env} k ret unform-keys]
-  (let [true->query (fn [x]
-                      (if (true? x)
-                        (let [spec (get unform-keys (::type env))]
-                          (s/unform spec dispatched-by))
-                        x))]
-    (when (some? ret)
-     (cond
-       (true? ret) [(true->query ret)]
-       (sequential? ret) (into [] (map true->query) ret)
-       :else
-       (throw
-         (ex-info
-           (str "Unable to handle return from k: " k
-                " with :target " target
-                " return: " ret)
-           {:k      k
-            :ret    ret
-            :target target}))))))
-
 (defn- query-fragment [env k expr]
   {::type   (::type env)
    ::key    k
@@ -128,18 +108,10 @@
   [env [_ {:keys [expr params]}]]
   (parse (assoc env :params params) expr))
 
-(defn assert-spec [spec x]
-  (if (s/valid? spec x)
-    x
-    (let [ed (s/explain-data spec x)]
-      (throw (ex-info
-               (str "Spec assertion failed\n" (with-out-str (s/explain-out ed)))
-               ed)))))
-
 (def identity-plugin
   (fn
-    ([env k p] env)
-    ([env k p ret] ret)))
+    ([env _ _] env)
+    ([_ _ _ ret] ret)))
 
 (def identity-plugin-map
   {:before identity-plugin
@@ -170,24 +142,25 @@
                                        :opt [::params ::query ::expr]))
 (s/def ::parsed-query (s/coll-of ::parsed-query-fragment :kind vector?))
 
-(defn- parse-query [env query]
-  (reduce (fn [query plugin]
-            (plugin env query))
-          query
-          (::query-plugins env)))
-
 (s/def ::query-plugin (s/fspec :args (s/cat :env map? :query ::parsed-query)
                                :ret ::parsed-query))
 (s/def ::query-plugins (s/+ ::query-plugin))
 (s/def ::config (s/keys :req-un [::read ::mutate]
                         :opt-un [::join-namespace ::union-namespace ::union-selector]))
 (s/def ::env (s/keys :opt [::config ::query-plugins]))
+
+(defn- parse-query [env query]
+  (reduce (fn [query plugin]
+            (plugin env query))
+          query
+          (::query-plugins env)))
+
 (s/fdef parse-query
         :args (s/cat :env ::env
                      :query ::query)
         :ret ::parsed-query)
 
-(defn with-plugins-middleware [parse-type plugins-key]
+(defn with-plugins-fn [parse-type plugins-key]
   (fn [env k p]
     (let [plugins (get env plugins-key)
           env (transduce (keep :before)
@@ -208,23 +181,40 @@
 
 (defn handle-read-mutate-return-plugin [unform-keys]
   {:after
-   (fn [env k p ret]
-     (if (nil? (:target env))
+   (fn [{:keys [target dispatched-by] :as env} k p ret]
+     (if (nil? target)
        ;; Returning a pair that can be conjed into a {}.
        [k ret]
        ;; Handle reads with target
-       (handle-target-return env k ret unform-keys)))})
+       (let [true->query (fn [x]
+                           (if (true? x)
+                             (let [spec (get unform-keys (::type env))]
+                               (s/unform spec dispatched-by))
+                             x))]
+         (when (some? ret)
+           (cond
+             (true? ret) [(true->query ret)]
+             (sequential? ret) (into [] (map true->query) ret)
+             :else
+             (throw
+               (ex-info
+                 (str "Unable to handle return from k: " k
+                      " with :target " target
+                      " return: " ret)
+                 {:k      k
+                  :ret    ret
+                  :target target})))))))})
 
 (def parsed-query->run-pluggins->returning-result
-  (let [type->call-fn {:read   (with-plugins-middleware :read ::read-plugins)
-                       :mutate (with-plugins-middleware :mutate ::mutate-plugins)}]
+  (let [call-fns {:read   (with-plugins-fn :read ::read-plugins)
+                  :mutate (with-plugins-fn :mutate ::mutate-plugins)}]
     (fn [env query]
       (let [xf (map (fn [{::keys [type expr params key query]}]
                       (let [env (assoc env :dispatched-by expr
                                            :query query
                                            ::type type
                                            ::params params)]
-                        ((type->call-fn type) env key params))))
+                        ((get call-fns type) env key params))))
             query (sort-by (comp {:mutate 0 :read 1} ::type) query)]
         (if (nil? (:target env))
           (->> query
@@ -465,33 +455,41 @@
   (-> (query->pattern-map query)
       (pattern-map->query)))
 
+(def dedupe-query-plugin
+  (fn [{::keys [config] :as env} query]
+    (let [reads (atom [])
+          mutates (atom [])
+          parser (parser
+                   (assoc config
+                     :eager? false
+                     :read (fn [env k params]
+                             (if-some [r (when (::calling-union-selector env)
+                                           (:read config))]
+                               ;; If we're calling union-selector, add the original
+                               ;; read back into the env, as the union selector can
+                               ;; call whatever it wants.
+                               (r (assoc env :read r) k params)
+                               (swap! reads conj
+                                      (cond-> (s/unform ::l-read-expr (:dispatched-by env))
+                                              (some? params)
+                                              (list params)))))
+                     :mutate (fn [env _ _]
+                               (swap! mutates conj (s/unform ::mutation-expr (:dispatched-by env))))))]
+      (parser (assoc env :parser parser) query)
+      (into @mutates (merge-read-queries @reads)))))
+
 ;; Deduping query recursively
 (defn dedupe-query
   "Takes a parser and a query, returns a new query where the reads
-  have merged pull patterns."
+  have merged pull patterns.
+
+  Old. Please use the query-plugin if you're using lajt.parser/parser"
   [parser-or-config env query]
-  (let [reads (atom [])
-        mutates (atom [])
-        config (if (fn? parser-or-config)
-                 (parser-or-config)
-                 parser-or-config)
-        parser (parser
-                 (assoc config
-                   :read (fn [env k params]
-                           (if-some [r (when (::calling-union-selector env)
-                                         (:read config))]
-                             ;; If we're calling union-selector, add the original
-                             ;; read back into the env, as the union selector can
-                             ;; call whatever it wants.
-                             (r (assoc env :read r) k params)
-                             (swap! reads conj
-                                    (cond-> (s/unform ::l-read-expr (:dispatched-by env))
-                                            (some? params)
-                                            (list params)))))
-                   :mutate (fn [env _ _]
-                             (swap! mutates conj (s/unform ::mutation-expr (:dispatched-by env))))))]
-    (parser (assoc env :parser parser) query)
-    (into @mutates (merge-read-queries @reads))))
+  (let [env (assoc env ::query-plugins [dedupe-query-plugin]
+                       ::config (if (fn? parser-or-config)
+                                  (parser-or-config)
+                                  parser-or-config))]
+    (parse-query env query)))
 
 (comment
 
