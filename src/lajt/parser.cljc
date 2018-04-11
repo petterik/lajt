@@ -316,7 +316,7 @@
              (let [[_ [_ join-val]] (first dispatch-val)
                    conformed-join join-val]
                (assoc env :read (fn [env k p]
-                                  ((:parser env) env conformed-join)))))))})))
+                                  ((:parser env) env conformed-join (:target env))))))))})))
 
 (defn selects-and-calls-union-plugin [union-namespaces union-selector]
   (let [union-namespaces (name-set union-namespaces)]
@@ -345,7 +345,7 @@
                                    p)
                    conformed-union (get union-val selected-path)]
                (assoc env :read (fn [env k p]
-                                  ((:parser env) env conformed-union)))))))})))
+                                  ((:parser env) env conformed-union (:target env))))))))})))
 
 (defn parser
   "Like parser, but parses unions and joins lazily and more effectively.

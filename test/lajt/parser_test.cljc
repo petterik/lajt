@@ -3,6 +3,7 @@
     [clojure.test :as t :refer [deftest is are testing]]
     [lajt.parser :as parser]
     [lajt.read :as read]
+    [lajt.read.datascript]
     [clojure.spec.alpha :as s]
     [clojure.spec.test.alpha :as st]
     [clojure.spec.gen.alpha :as gen]))
@@ -21,11 +22,14 @@
 
 (defn ->parser [parser-fn]
   (fn [env query & [target]]
-    (let [parser (parser-fn (merge
-                              {:read   read-mutate-handler
+    (let [read (if-let [reads (:reads env)]
+                 (read/->read-fn reads (lajt.read.datascript/db-fns))
+                 read-mutate-handler)
+          parser (parser-fn (merge
+                              {:read   read
                                :mutate read-mutate-handler}
                               env))]
-      (parser env query target))))
+      (parser env query (or target (:target env))))))
 
 (def om-next-mutate-wrapper
   (fn [mutate]
@@ -52,25 +56,6 @@
         (test-fn)))))
 
 (t/use-fixtures :each setup)
-
-#_(defn parsers [conf]
-  (let [->parser-fns [parser/parser
-                      parser/eager-parser]
-        om-next-parsers
-        (->> ->parser-fns
-             (map (fn [->parser]
-                    (->parser
-                      (-> conf
-                          (assoc :om-next? true)
-                          (update :read read/om-next-value-wrapper)
-                          (update :mutate (fn [mutate]
-                                            (fn [env k p]
-                                              (if-some [t (:target env)]
-                                                {t true}
-                                                {:action (constantly
-                                                           (mutate env k p))})))))))))]
-    (-> (mapv #(% conf) ->parser-fns)
-        (into om-next-parsers))))
 
 (deftest query-parser-test
   (is (= (*parser* *env* '[:read-key

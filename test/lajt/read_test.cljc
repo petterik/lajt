@@ -4,6 +4,7 @@
     [lajt.read :as read]
     [lajt.read.datascript]
     [lajt.parser :as parser]
+    [lajt.parser-test :as parser-test]
     [datascript.core :as d]))
 
 ;; Ok cool. Reads implemented.
@@ -23,27 +24,17 @@
 (defn debug-parser [p]
   (fn
     ([] (p))
-    ([env query]
-     (p (assoc env :debug true) query))))
-
-(defn- ->parser
-  ([] (->parser parser/parser))
-  ([parser-fn]
-   (fn [env query]
-     {:pre [(some? (:reads env))]}
-     (let [read (read/->read-fn (:reads env)
-                                (lajt.read.datascript/db-fns))
-           parser (parser-fn {:read read})]
-       (parser env query)))))
+    ([env query & [target]]
+     (p (assoc env :debug true) query (or target (:target env))))))
 
 (def ^:dynamic *db*)
 (def ^:dynamic *parser*)
 
 (defn setup [test-fn]
-  (binding [*db* (->db)]
-    (doseq [parser [(->parser parser/parser)
-                    (->parser parser/eager-parser)]]
-      (binding [*parser* parser]
+  (parser-test/setup
+    (fn []
+      (binding [*db* (->db)
+                *parser* parser-test/*parser*]
         (test-fn)))))
 
 (t/use-fixtures :each setup)
@@ -309,7 +300,10 @@
 
 (deftest no-op-test
   (is (nil? (read-query {:no-op true})))
-  (is (nil? (read-query {:no-op true} {:pull [:something]}))))
+  (is (nil? (read-query {:no-op true} {:pull [:something]})))
+  (is (= [:read] (*parser* {:reads {:read {:remote true :no-op true}}}
+                         [:read]
+                         :remote))))
 
 (deftest pre-ops-for-target
   (doseq [remote [true #(-> % :params :remote?) [:params :remote?]]]
@@ -371,7 +365,7 @@
 
   (do
     (def ^:dynamic *db* (->db))
-    (def ^:dynamic *parser* (debug-parser (->parser)))
+    (def ^:dynamic *parser* (debug-parser (parser-test/->parser)))
 
     )
   (clojure.spec.test.alpha/unstrument)

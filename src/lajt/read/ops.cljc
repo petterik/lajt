@@ -40,7 +40,7 @@
 (defmethod call-op :depends-on
   [env _ v]
   (let [query (if (fn? v) (v env) v)
-        res ((:parser env) env query)
+        res ((:parser env) env query (:target env))
         env (if (some? (:target env))
               (update env :results (fnil into []) res)
               (update env :results merge res))]
