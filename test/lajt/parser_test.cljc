@@ -46,7 +46,8 @@
                (fn [config]
                  (parser-fn
                    (-> config
-                       (assoc :om-next? true)
+                       (update :read-plugins (fnil conj []) parser/unwrap-om-next-read-plugin)
+                       (update :mutate-plugins (fnil conj []) parser/unwrap-om-next-mutate-plugin)
                        (update :read read/om-next-value-wrapper)
                        (update :mutate om-next-mutate-wrapper)))))
              parser-fns)]
@@ -286,7 +287,7 @@
         plugin {:before (fn [env k p]
                           (swap! state inc)
                           env)}]
-    (*parser* (assoc *env* ::parser/read-plugins [plugin]
+    (*parser* (assoc *env* :read-plugins [plugin]
                            :join-namespace "join")
               [{:join [:read1 :read2 :read3]}])
     (is (contains? #{1 4} @state)))

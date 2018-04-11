@@ -308,6 +308,13 @@
              (assoc env :read (fn [env k p]
                                 ((:parser env) env query (:target env)))))))})))
 
+(defn nice-to-have-read-plugins [{:keys [join-namespace union-namespace union-selector]}]
+  (concat
+    (when join-namespace
+      [(recursively-call-joins-plugin join-namespace)])
+    (when union-namespace
+      [(selects-and-calls-union-plugin union-namespace union-selector)])))
+
 (defn parser
   "Like parser, but parses unions and joins lazily and more effectively.
   Takes:
@@ -325,19 +332,18 @@
   Stuff it doesn't parse:
   - Pull patterns of reads.
   - Every branch of an union. Only the selected one(s)."
-  [{:keys [read mutate join-namespace union-namespace union-selector om-next? eager?]
-    :as config}]
+  [{:keys  [read mutate read-plugins mutate-plugins query-plugins eager?]
+    :as    config}]
   (fn self
     ([] config)
     ([env query target]
      (self (assoc env :target target) query))
     ([env query]
      (s/assert ::query query)
-     (let [return-plugin (handle-read-mutate-return-plugin {:mutate ::mutation-expr
-                                                            :read   (if eager?
-                                                                      ::read-expr
-                                                                      ::l-read-expr)})
-           {::keys [read-plugins mutate-plugins query-plugins]} env
+     (let [to-parsed-query-plugin (if eager? eager-query-parser-plugin lazy-query-parser-plugin)
+           return-plugin (handle-read-mutate-return-plugin
+                           {:mutate ::mutation-expr
+                            :read   (if eager? ::read-expr ::l-read-expr)})
            env (-> (assoc env ::config config
                               ::initialized? true
                               :read read
@@ -345,21 +351,12 @@
                    (cond-> (not (::initialized? env))
                            (assoc
                              ::read-plugins (concat read-plugins
-                                                    [(recursively-call-joins-plugin join-namespace)
-                                                     (selects-and-calls-union-plugin
-                                                       union-namespace union-selector)]
-                                                    (when om-next?
-                                                      [unwrap-om-next-read-plugin])
+                                                    (nice-to-have-read-plugins config)
                                                     [return-plugin])
-                             ::mutate-plugins (concat mutate-plugins
-                                                      (when om-next?
-                                                        [unwrap-om-next-mutate-plugin])
-                                                      [return-plugin])
+                             ::mutate-plugins (concat mutate-plugins [return-plugin])
                              ::query-plugins (concat query-plugins
-                                                     (if eager?
-                                                       [eager-query-parser-plugin]
-                                                       [lazy-query-parser-plugin])
-                                                     [parsed-query->run-pluggins->returning-result])))
+                                                     [to-parsed-query-plugin
+                                                      parsed-query->run-pluggins->returning-result])))
                    ;; Allow the user to have a pointer to the root parser in the env.
                    (cond-> (nil? (:parser env))
                            (assoc :parser self)))
