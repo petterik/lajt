@@ -517,7 +517,7 @@
                                             (list params)))))
                    :mutate (fn [env _ _]
                              (swap! mutates conj (s/unform ::mutation-expr (:dispatched-by env))))))]
-    (parser env query)
+    (parser (assoc env :parser parser) query)
     (into @mutates (merge-read-queries @reads))))
 
 (comment
