@@ -241,7 +241,11 @@
                                :union-namespace :union
                                :union-selector  (constantly ::selected)})]
     (are [query deduped] (= deduped
-                            (parser/dedupe-query parser *env* query))
+                            (parser/dedupe-query parser
+                                                 ;; Add a parser in env, as there
+                                                 ;; could be one.
+                                                 (assoc *env* :parser parser)
+                                                 query))
       [{:join [:read]} {:read [:a]}]
       [{:read [:a]}]
 
