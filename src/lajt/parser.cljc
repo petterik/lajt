@@ -160,7 +160,7 @@
                      :query ::query)
         :ret ::parsed-query)
 
-(defn with-plugins-fn [parse-type plugins-key]
+(defn with-plugins-fn [read-or-mutate plugins-key]
   (fn [env k p]
     (let [plugins (get env plugins-key)
           env (transduce (keep :before)
@@ -169,7 +169,7 @@
                               (plugin env k (::params env))))
                           (assoc env ::params p)
                           plugins)
-          val ((get env parse-type) env k (::params env))]
+          val ((get env read-or-mutate) env k (::params env))]
       (transduce (keep :after)
                  (completing
                    (fn [env plugin]
@@ -178,6 +178,25 @@
                    ::return)
                  (assoc env ::return val)
                  plugins))))
+
+(def parsed-query->run-pluggins->returning-result
+  (let [call-fns {:read   (with-plugins-fn :read ::read-plugins)
+                  :mutate (with-plugins-fn :mutate ::mutate-plugins)}]
+    (fn [env query]
+      (let [xf (map (fn [{::keys [type expr params key query]}]
+                      (let [env (assoc env :dispatched-by expr
+                                           :query query
+                                           ::type type
+                                           ::params params)]
+                        ((get call-fns type) env key params))))
+            query (sort-by (comp {:mutate 0 :read 1} ::type) query)]
+        (if (nil? (:target env))
+          (->> query
+               (into {} (comp xf (remove (comp nil? second))))
+               (not-empty))
+          (->> query
+               (into []
+                     (comp xf cat (distinct)))))))))
 
 (defn handle-read-mutate-return-plugin [unform-keys]
   {:after
@@ -204,25 +223,6 @@
                  {:k      k
                   :ret    ret
                   :target target})))))))})
-
-(def parsed-query->run-pluggins->returning-result
-  (let [call-fns {:read   (with-plugins-fn :read ::read-plugins)
-                  :mutate (with-plugins-fn :mutate ::mutate-plugins)}]
-    (fn [env query]
-      (let [xf (map (fn [{::keys [type expr params key query]}]
-                      (let [env (assoc env :dispatched-by expr
-                                           :query query
-                                           ::type type
-                                           ::params params)]
-                        ((get call-fns type) env key params))))
-            query (sort-by (comp {:mutate 0 :read 1} ::type) query)]
-        (if (nil? (:target env))
-          (->> query
-               (into {} (comp xf (remove (comp nil? second))))
-               (not-empty))
-          (->> query
-               (into []
-                     (comp xf cat (distinct)))))))))
 
 (def eager-query-parser-plugin
   (fn [env query]
@@ -284,19 +284,14 @@
                      (throw (ex-info "Dispatching on union-namespace but :union-selector was nil!"
                                      {:key           k
                                       :dispatched-by (:dispatched-by env)})))
-                 selected-path (union-selector
-                                 ;; Assoc the initial read function (not this one)
-                                 ;; Such that the union selector can dispatch
-                                 ;; to the read function.
-                                 ;; TODO: Remove this hack. :read should not be
-                                 ;; exposed in ::config ?
-                                 (assoc env :read (:read (::config env))
-                                            ::calling-union-selector true)
-                                 k
-                                 p)
-                 query (get-in env [:query selected-path] selected-path)]
-             (assoc env :read (fn [env k p]
-                                ((:parser env) env query (:target env)))))))})))
+                 selected-path (union-selector env k p)
+                 query (get-in env [:query selected-path])]
+             (if (nil? query)
+               (do (prn "WARN: no path in query found with union-selected path: " selected-path
+                        " in union-map: " (:query env))
+                   env)
+               (assoc env :read (fn [env k p]
+                                  ((:parser env) env query (:target env))))))))})))
 
 (defn nice-to-have-read-plugins [{:keys [join-namespace union-namespace union-selector]}]
   (concat
@@ -463,16 +458,10 @@
                    (assoc config
                      :eager? false
                      :read (fn [env k params]
-                             (if-some [r (when (::calling-union-selector env)
-                                           (:read config))]
-                               ;; If we're calling union-selector, add the original
-                               ;; read back into the env, as the union selector can
-                               ;; call whatever it wants.
-                               (r (assoc env :read r) k params)
-                               (swap! reads conj
-                                      (cond-> (s/unform ::l-read-expr (:dispatched-by env))
-                                              (some? params)
-                                              (list params)))))
+                             (swap! reads conj
+                                    (cond-> (s/unform ::l-read-expr (:dispatched-by env))
+                                            (some? params)
+                                            (list params))))
                      :mutate (fn [env _ _]
                                (swap! mutates conj (s/unform ::mutation-expr (:dispatched-by env))))))]
       (parser (assoc env :parser parser) query)

@@ -273,15 +273,6 @@
     ;; Created https://github.com/petterik/lajt/issues/2
     ))
 
-(deftest dispatch-old-read-test
-  (let [conf {:read            (fn [env k p] :choice)
-              :join-namespace  :join
-              :union-namespace :union
-              :union-selector  (fn [env k p]
-                                 ((:read env) env k p))}]
-    (is (= [:read-key]
-           (parser/dedupe-query conf *env* [{:union {:choice [:read-key]}}])))))
-
 (deftest initializing-parser-plugins-once
   (let [state (atom 0)
         plugin {:before (fn [env k p]
