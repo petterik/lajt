@@ -174,7 +174,7 @@
   (reduce (fn [query plugin]
             (plugin env query))
           query
-          (cons (::root-query-plugin env) (::query-plugins env))))
+          (::query-plugins env)))
 
 (defn- parse-query [env query]
   (->> query
@@ -216,20 +216,22 @@
 (def type->call-fn {:read   (with-plugins-middleware :read ::read-plugins)
                     :mutate (with-plugins-middleware :mutate ::mutate-plugins)})
 
+(def handle-read-mutate-return-plugin
+  {:after
+   (fn [env k p ret]
+     (if (nil? (:target env))
+       ;; Returning a pair that can be conjed into a {}.
+       [k ret]
+       ;; Handle reads with target
+       (handle-target-return env k ret)))})
+
 (defn call-parsed-query [env query]
   (let [xf (map (fn [{::keys [type expr params key query]}]
-                  (let [call-fn (type->call-fn type)
-                        env (assoc env :dispatched-by expr
+                  (let [env (assoc env :dispatched-by expr
                                        :query query
                                        ::type type
-                                       ::params params)
-                        ret (call-fn env key params)]
-                    ;; TODO: Could this be plugins?
-                    (if (nil? (:target env))
-                      ;; Returning a pair that can be conjed into a {}.
-                      [key ret]
-                      ;; Handle reads with target
-                      (handle-target-return env key ret)))))]
+                                       ::params params)]
+                    ((type->call-fn type) env key params))))]
     (if (nil? (:target env))
       (->> query
            (into {} (comp xf (remove (comp nil? second))))
@@ -269,22 +271,29 @@
     ([env query]
      (assert-spec ::query query)
       ;; TODO: Replace all this read wrapping with plugins.
-     (let [env (cond-> (assoc env ::config config
-                                  ::initialized? true
-                                  ::root-query-plugin eager-query-parser-plugin
-                                  :read read
-                                  :mutate mutate
-                                  :unform-keys {:read   ::read-expr
-                                                :mutate ::mutation-expr})
-                       (not (::initialized? env))
-                       (-> (update ::read-plugins vec)
-                           (cond-> om-next?
-                                   (-> (update ::read-plugins conj unwrap-om-next-read-plugin)
-                                       (update ::mutate-plugins conj unwrap-om-next-mutate-plugin)))
-                           ;; Allow the user to have a pointer to the root parser in the env.
-                           (cond->
-                             (nil? (:parser env))
-                             (assoc :parser self))))]
+     (let [{::keys [read-plugins mutate-plugins query-plugins]} env
+           env (-> (assoc env ::config config
+                              ::initialized? true
+                              :read read
+                              :mutate mutate
+                              :unform-keys {:read   ::read-expr
+                                            :mutate ::mutation-expr})
+                   (cond-> (not (::initialized? env))
+                           (assoc
+                             ::read-plugins (concat read-plugins
+                                                    (when om-next?
+                                                      [unwrap-om-next-read-plugin])
+                                                    [handle-read-mutate-return-plugin])
+                             ::mutate-plugins (concat mutate-plugins
+                                                      (when om-next?
+                                                        [unwrap-om-next-mutate-plugin])
+                                                      [handle-read-mutate-return-plugin])
+                             ::query-plugins (concat query-plugins
+                                                     [eager-query-parser-plugin])))
+                   ;; Allow the user to have a pointer to the root parser in the env.
+                   (cond->
+                     (nil? (:parser env))
+                     (assoc :parser self)))]
        (->> query
             (parse-query env)
             (call-parsed-query env))))))
@@ -372,25 +381,31 @@
      (self (assoc env :target target) query))
     ([env query]
      (s/assert ::query query)
-     (let [env (cond-> (assoc env ::config config
-                                  ::initialized? true
-                                  ::root-query-plugin lazy-query-parser-plugin
-                                  :read read
-                                  :mutate mutate
-                                  :unform-keys {:read   ::l-read-expr
-                                                :mutate ::mutation-expr})
-                       (not (::initialized? env))
-                       (-> (update ::read-plugins vec)
-                           (update ::read-plugins into
-                                   [(recursively-call-joins-plugin join-namespace)
-                                    (selects-and-calls-union-plugin union-namespace
-                                                                    union-selector)])
-                           (cond-> om-next?
-                                   (-> (update ::read-plugins conj unwrap-om-next-read-plugin)
-                                       (update ::mutate-plugins conj unwrap-om-next-mutate-plugin)))
-                           ;; Allow the user to have a pointer to the root parser in the env.
-                           (cond-> (nil? (:parser env))
-                                   (assoc :parser self))))
+     (let [{::keys [read-plugins mutate-plugins query-plugins]} env
+           env (-> (assoc env ::config config
+                              ::initialized? true
+                              :read read
+                              :mutate mutate
+                              :unform-keys {:read   ::l-read-expr
+                                            :mutate ::mutation-expr})
+                   (cond-> (not (::initialized? env))
+                           (assoc
+                             ::read-plugins (concat read-plugins
+                                                    [(recursively-call-joins-plugin join-namespace)
+                                                     (selects-and-calls-union-plugin
+                                                       union-namespace union-selector)]
+                                                    (when om-next?
+                                                      [unwrap-om-next-read-plugin])
+                                                    [handle-read-mutate-return-plugin])
+                             ::mutate-plugins (concat mutate-plugins
+                                                      (when om-next?
+                                                        [unwrap-om-next-mutate-plugin])
+                                                      [handle-read-mutate-return-plugin])
+                             ::query-plugins (concat query-plugins
+                                                     [lazy-query-parser-plugin])))
+                   ;; Allow the user to have a pointer to the root parser in the env.
+                   (cond-> (nil? (:parser env))
+                           (assoc :parser self)))
            return (->> query
                        (parse-query env)
                        (call-parsed-query env))]
