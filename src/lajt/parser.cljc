@@ -61,11 +61,11 @@
 
 ;; End lazy query spec.
 
-(defn- handle-target-return [{:keys [target dispatched-by] :as env} k ret]
+(defn- handle-target-return [{:keys [target dispatched-by] :as env} k ret unform-keys]
   (let [true->query (fn [x]
                       (if (true? x)
-                        (let [unform-key (get-in env [:unform-keys (::type env)])]
-                          (s/unform unform-key dispatched-by))
+                        (let [spec (get unform-keys (::type env))]
+                          (s/unform spec dispatched-by))
                         x))]
     (when (some? ret)
      (cond
@@ -181,8 +181,7 @@
 (s/def ::query-plugins (s/+ ::query-plugin))
 (s/def ::config (s/keys :req-un [::read ::mutate]
                         :opt-un [::join-namespace ::union-namespace ::union-selector]))
-(s/def ::env (s/keys :req-un [::unform-keys]
-                     :opt [::config ::query-plugins]))
+(s/def ::env (s/keys :opt [::config ::query-plugins]))
 (s/fdef parse-query
         :args (s/cat :env ::env
                      :query ::query)
@@ -207,14 +206,14 @@
                  (assoc env ::return val)
                  plugins))))
 
-(def handle-read-mutate-return-plugin
+(defn handle-read-mutate-return-plugin [unform-keys]
   {:after
    (fn [env k p ret]
      (if (nil? (:target env))
        ;; Returning a pair that can be conjed into a {}.
        [k ret]
        ;; Handle reads with target
-       (handle-target-return env k ret)))})
+       (handle-target-return env k ret unform-keys)))})
 
 (def parsed-query->run-pluggins->returning-result
   (let [type->call-fn {:read   (with-plugins-middleware :read ::read-plugins)
@@ -226,7 +225,7 @@
                                            ::type type
                                            ::params params)]
                         ((type->call-fn type) env key params))))
-            query (vec (sort-by (comp {:mutate 0 :read 1} ::type) query))]
+            query (sort-by (comp {:mutate 0 :read 1} ::type) query)]
         (if (nil? (:target env))
           (->> query
                (into {} (comp xf (remove (comp nil? second))))
@@ -243,7 +242,6 @@
            (map (fn [{::keys [query expr] :as fragment}]
                   (cond-> fragment
                           (some? query)
-                          ;; unform some how.
                           (cond->
                             (= :join (first expr))
                             (update ::query #(s/unform ::read-exprs %))
@@ -266,23 +264,23 @@
     ([env query]
      (assert-spec ::query query)
       ;; TODO: Replace all this read wrapping with plugins.
-     (let [{::keys [read-plugins mutate-plugins query-plugins]} env
+     (let [return-plugin (handle-read-mutate-return-plugin {:read   ::read-expr
+                                                            :mutate ::mutation-expr})
+           {::keys [read-plugins mutate-plugins query-plugins]} env
            env (-> (assoc env ::config config
                               ::initialized? true
                               :read read
-                              :mutate mutate
-                              :unform-keys {:read   ::read-expr
-                                            :mutate ::mutation-expr})
+                              :mutate mutate)
                    (cond-> (not (::initialized? env))
                            (assoc
                              ::read-plugins (concat read-plugins
                                                     (when om-next?
                                                       [unwrap-om-next-read-plugin])
-                                                    [handle-read-mutate-return-plugin])
+                                                    [return-plugin])
                              ::mutate-plugins (concat mutate-plugins
                                                       (when om-next?
                                                         [unwrap-om-next-mutate-plugin])
-                                                      [handle-read-mutate-return-plugin])
+                                                      [return-plugin])
                              ::query-plugins (concat query-plugins
                                                      [eager-query-parser-plugin
                                                       parsed-query->run-pluggins->returning-result])))
@@ -312,14 +310,12 @@
       identity-plugin-map
       {:before
        (fn [env k p]
-         (let [[dispatch-key dispatch-val] (:dispatched-by env)]
-           (if-not (and (= :join dispatch-key)
-                        (contains? join-namespaces (get-name k)))
-             env
-             (let [[_ [_ join-val]] (first dispatch-val)
-                   conformed-join join-val]
-               (assoc env :read (fn [env k p]
-                                  ((:parser env) env conformed-join (:target env))))))))})))
+         (if-not (and (= :join (first (:dispatched-by env)))
+                      (contains? join-namespaces (get-name k)))
+           env
+           (let [query (:query env)]
+             (assoc env :read (fn [env k p]
+                                ((:parser env) env query (:target env)))))))})))
 
 (defn selects-and-calls-union-plugin [union-namespaces union-selector]
   (let [union-namespaces (name-set union-namespaces)]
@@ -327,28 +323,26 @@
       identity-plugin-map
       {:before
        (fn [env k p]
-         (let [[dispatch-key dispatch-val] (:dispatched-by env)]
-           (if-not (and (= :union dispatch-key)
-                        (contains? union-namespaces (get-name k)))
-             env
-             (let [[_ union-val] (first dispatch-val)
-                   _ (when (nil? union-selector)
-                       (throw (ex-info "Dispatching on union-namespace but :union-selector was nil!"
-                                       {:key           k
-                                        :dispatched-by (:dispatched-by env)})))
-                   selected-path (union-selector
-                                   ;; Assoc the initial read function (not this one)
-                                   ;; Such that the union selector can dispatch
-                                   ;; to the read function.
-                                   ;; TODO: Remove this hack. :read should not be
-                                   ;; exposed in ::config ?
-                                   (assoc env :read (:read (::config env))
-                                              ::calling-union-selector true)
-                                   k
-                                   p)
-                   conformed-union (get union-val selected-path)]
-               (assoc env :read (fn [env k p]
-                                  ((:parser env) env conformed-union (:target env))))))))})))
+         (if-not (and (= :union (first (:dispatched-by env)))
+                      (contains? union-namespaces (get-name k)))
+           env
+           (let [_ (when (nil? union-selector)
+                     (throw (ex-info "Dispatching on union-namespace but :union-selector was nil!"
+                                     {:key           k
+                                      :dispatched-by (:dispatched-by env)})))
+                 selected-path (union-selector
+                                 ;; Assoc the initial read function (not this one)
+                                 ;; Such that the union selector can dispatch
+                                 ;; to the read function.
+                                 ;; TODO: Remove this hack. :read should not be
+                                 ;; exposed in ::config ?
+                                 (assoc env :read (:read (::config env))
+                                            ::calling-union-selector true)
+                                 k
+                                 p)
+                 query (get-in env [:query selected-path] selected-path)]
+             (assoc env :read (fn [env k p]
+                                ((:parser env) env query (:target env)))))))})))
 
 (defn parser
   "Like parser, but parses unions and joins lazily and more effectively.
@@ -367,7 +361,7 @@
   Stuff it doesn't parse:
   - Pull patterns of reads.
   - Every branch of an union. Only the selected one(s)."
-  [{:keys [read mutate join-namespace union-namespace union-selector om-next?]
+  [{:keys [read mutate join-namespace union-namespace union-selector om-next? eager?]
     :as config}]
   (fn self
     ([] config)
@@ -375,13 +369,15 @@
      (self (assoc env :target target) query))
     ([env query]
      (s/assert ::query query)
-     (let [{::keys [read-plugins mutate-plugins query-plugins]} env
+     (let [return-plugin (handle-read-mutate-return-plugin {:mutate ::mutation-expr
+                                                            :read   (if eager?
+                                                                      ::read-expr
+                                                                      ::l-read-expr)})
+           {::keys [read-plugins mutate-plugins query-plugins]} env
            env (-> (assoc env ::config config
                               ::initialized? true
                               :read read
-                              :mutate mutate
-                              :unform-keys {:read   ::l-read-expr
-                                            :mutate ::mutation-expr})
+                              :mutate mutate)
                    (cond-> (not (::initialized? env))
                            (assoc
                              ::read-plugins (concat read-plugins
@@ -390,14 +386,16 @@
                                                        union-namespace union-selector)]
                                                     (when om-next?
                                                       [unwrap-om-next-read-plugin])
-                                                    [handle-read-mutate-return-plugin])
+                                                    [return-plugin])
                              ::mutate-plugins (concat mutate-plugins
                                                       (when om-next?
                                                         [unwrap-om-next-mutate-plugin])
-                                                      [handle-read-mutate-return-plugin])
+                                                      [return-plugin])
                              ::query-plugins (concat query-plugins
-                                                     [lazy-query-parser-plugin
-                                                      parsed-query->run-pluggins->returning-result])))
+                                                     (if eager?
+                                                       [eager-query-parser-plugin]
+                                                       [lazy-query-parser-plugin])
+                                                     [parsed-query->run-pluggins->returning-result])))
                    ;; Allow the user to have a pointer to the root parser in the env.
                    (cond-> (nil? (:parser env))
                            (assoc :parser self)))
@@ -409,6 +407,8 @@
            (prn "lajt.parser target: " (:target env))))
        return))))
 
+(defn eager-parser2 [config]
+  (parser (assoc config :eager? true)))
 
 ;; Merging queries
 
