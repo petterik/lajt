@@ -180,8 +180,8 @@
                  plugins))))
 
 (def parsed-query->run-pluggins->returning-result
-  (let [call-fns {:read   (with-plugins-fn :read ::read-plugins)
-                  :mutate (with-plugins-fn :mutate ::mutate-plugins)}]
+  (let [call-fns {:read   (with-plugins-fn ::read-fn ::read-plugins)
+                  :mutate (with-plugins-fn ::mutate-fn ::mutate-plugins)}]
     (fn [env query]
       (let [xf (map (fn [{::keys [type expr params key query]}]
                       (let [env (assoc env :dispatched-by expr
@@ -268,8 +268,9 @@
                       (contains? join-namespaces (get-name k)))
            env
            (let [query (:query env)]
-             (assoc env :read (fn [env k p]
-                                ((:parser env) env query (:target env)))))))})))
+             (assoc env ::read-fn
+                        (fn [env k p]
+                          ((:parser env) env query (:target env)))))))})))
 
 (defn selects-and-calls-union-plugin [union-namespaces union-selector]
   (let [union-namespaces (name-set union-namespaces)]
@@ -290,8 +291,9 @@
                (do (prn "WARN: no path in query found with union-selected path: " selected-path
                         " in union-map: " (:query env))
                    env)
-               (assoc env :read (fn [env k p]
-                                  ((:parser env) env query (:target env))))))))})))
+               (assoc env ::read-fn
+                          (fn [env k p]
+                            ((:parser env) env query (:target env))))))))})))
 
 (defn nice-to-have-read-plugins [{:keys [join-namespace union-namespace union-selector]}]
   (concat
@@ -331,8 +333,8 @@
                             :read   (if eager? ::read-expr ::l-read-expr)})
            env (-> (assoc env ::config config
                               ::initialized? true
-                              :read read
-                              :mutate mutate)
+                              ::read-fn read
+                              ::mutate-fn mutate)
                    (cond-> (not (::initialized? env))
                            (assoc
                              ::read-plugins (concat read-plugins
