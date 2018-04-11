@@ -254,42 +254,6 @@
       (map (partial parse env))
       (s/conform ::l-query query))))
 
-(defn eager-parser
-  "Conforms the whole query - including pull pattern. Takes :read and :mutate keys."
-  [{:keys [read mutate om-next?] :as config}]
-  (fn self
-    ([] config)
-    ([env query target]
-     (self (assoc env :target target) query))
-    ([env query]
-     (assert-spec ::query query)
-      ;; TODO: Replace all this read wrapping with plugins.
-     (let [return-plugin (handle-read-mutate-return-plugin {:read   ::read-expr
-                                                            :mutate ::mutation-expr})
-           {::keys [read-plugins mutate-plugins query-plugins]} env
-           env (-> (assoc env ::config config
-                              ::initialized? true
-                              :read read
-                              :mutate mutate)
-                   (cond-> (not (::initialized? env))
-                           (assoc
-                             ::read-plugins (concat read-plugins
-                                                    (when om-next?
-                                                      [unwrap-om-next-read-plugin])
-                                                    [return-plugin])
-                             ::mutate-plugins (concat mutate-plugins
-                                                      (when om-next?
-                                                        [unwrap-om-next-mutate-plugin])
-                                                      [return-plugin])
-                             ::query-plugins (concat query-plugins
-                                                     [eager-query-parser-plugin
-                                                      parsed-query->run-pluggins->returning-result])))
-                   ;; Allow the user to have a pointer to the root parser in the env.
-                   (cond->
-                     (nil? (:parser env))
-                     (assoc :parser self)))]
-       (parse-query env query)))))
-
 (defn- get-name
   "Takes a keyword or a string and returns the string, namespace or the name of it."
   [k]
@@ -407,7 +371,11 @@
            (prn "lajt.parser target: " (:target env))))
        return))))
 
-(defn eager-parser2 [config]
+(defn eager-parser
+  "Conforms the whole query - including pull pattern. Takes :read and :mutate keys.
+
+  Deprecated. Here because of never-removing-stuff rule."
+  [config]
   (parser (assoc config :eager? true)))
 
 ;; Merging queries

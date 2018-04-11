@@ -40,7 +40,7 @@
                    (mutate env k p))}))))
 
 (defn setup [test-fn]
-  (let [parser-fns [parser/parser parser/eager-parser parser/eager-parser2]
+  (let [parser-fns [parser/parser parser/eager-parser]
         om-next-parser-fns
         (map (fn [parser-fn]
                (fn [config]
