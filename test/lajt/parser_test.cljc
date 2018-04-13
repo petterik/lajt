@@ -236,6 +236,17 @@
              (map (fn [[k v]]
                     {k v})))))))
 
+(comment
+  (def p (parser/parser {:read            read-mutate-handler
+                         :join-namespace  :join
+                         :union-namespace :union
+                         :union-selector  (constantly ::selected)}))
+  (parser/dedupe-query p {:debug true}
+                       [{:join [:read]} {:read [:a]}])
+
+  (parser/dedupe-query p {:debug true}
+                       [{:join [{:join [{:read [:b]}]}]} {:read [:a]}]))
+
 (deftest dedupe-query-test
   (let [parser (parser/parser {:read            read-mutate-handler
                                :join-namespace  :join
