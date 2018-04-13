@@ -102,51 +102,6 @@
     ;; TODO: define what happens for mutates.
     ))
 
-(deftest recursive-dispatch-parsing-test
-  (let [parser (parser/parser {:read            read-mutate-handler
-                               :join-namespace  "join"
-                               :union-namespace "union"
-                               :union-selector  (fn [{:keys [query]} k p]
-                                                  (assert (contains? query ::selected))
-                                                  ::selected)})]
-    (testing "joins"
-      (is (= (parser *env* [{:join [{:read1 [:a :b]}
-                                    {:read2 [:a :b]}]}
-                            {:join/with-ns [{:read1 [:a]}]}
-                            {:non-recursive [{:read1 [:a :b]}]}
-                            {:non/recursive [:a]}])
-             {:join          {:read1 {:query [:a :b]}
-                              :read2 {:query [:a :b]}}
-              :join/with-ns  {:read1 {:query [:a]}}
-              :non-recursive {:query [{:read1 [:a :b]}]}
-              :non/recursive {:query [:a]}})))
-
-    (testing "unions"
-      (is (= (parser *env* [{:union {::selected [:read1
-                                                 {:read2 [:a]}]
-                                     :other     [:read]}}
-                            {:union/with-ns {::selected [:read]
-                                             :other     [:read]}}
-                            {:custom-union {:a [:read1]
-                                            :b [:read2]}}])
-             {:union         {:read1 {}
-                              :read2 {:query [:a]}}
-              :union/with-ns {:read {}}
-              :custom-union  {:query {:a [:read1]
-                                      :b [:read2]}}})))))
-
-(deftest om-next-integration-test
-  #_(let [ps (parsers {:read   (fn [env k p]
-                               (if-some [t (:target env)]
-                                 {t true}
-                                 {:value (read-mutate-handler env k p)}))
-                     :mutate (fn [env k p]
-                               (if-some [t (:target env)]
-                                 {t true}
-                                 {:action (constantly ::executed!)}))})]
-    ;; TODO?
-    ))
-
 (deftest query-merging
   (are [query pattern-map] (= pattern-map
                               (parser/query->pattern-map query))
@@ -236,74 +191,54 @@
              (map (fn [[k v]]
                     {k v})))))))
 
-(comment
-  (def p (parser/parser {:read            read-mutate-handler
-                         :join-namespace  :join
-                         :union-namespace :union
-                         :union-selector  (constantly ::selected)}))
-  (parser/dedupe-query p {:debug true}
-                       [{:join [:read]} {:read [:a]}])
-
-  (parser/dedupe-query p {:debug true}
-                       [{:join [{:join [{:read [:b]}]}]} {:read [:a]}]))
-
 (deftest dedupe-query-test
-  (let [parser (parser/parser {:read            read-mutate-handler
-                               :join-namespace  :join
-                               :union-namespace :union
-                               :union-selector  (constantly ::selected)})]
-    (are [query deduped] (= deduped
-                            (parser/dedupe-query parser
-                                                 ;; Add a parser in env, as there
-                                                 ;; could be one.
-                                                 (assoc *env* :parser parser)
-                                                 query))
-      [{:join [:read]} {:read [:a]}]
-      [{:read [:a]}]
+  (are [query deduped] (= deduped (parser/dedupe-query
+                                    {:join-namespaces  [:join]
+                                     :union-namespaces [:union]
+                                     :union-selector   (constantly ::selected)}
+                                    *env*
+                                    query))
+    [{:join [:read]} {:read [:a]}]
+    [{:read [:a]}]
 
-      ;; unions, mutations and nested joins. Complex stuff.
-      '[{:read [:a {:b [:x]}]}
-        {:union {::selected [{:read [:c]}
-                             :read2]}}
-        (foo {:bar 1})
-        {:join/a [{:join/b [{:read [{:a [:x]} {:b [:y]} :d]}]}]}]
+    ;; unions, mutations and nested joins. Complex stuff.
+    '[{:read [:a {:b [:x]}]}
+      {:union {::selected [{:read [:c]}
+                           :read2]}}
+      (foo {:bar 1})
+      {:join/a [{:join/b [{:read [{:a [:x]} {:b [:y]} :d]}]}]}]
 
-      '[(foo {:bar 1})
-        {:read [{:a [:x]}
-                {:b [:x :y]}
-                :c
-                :d]}
-        :read2])
+    '[(foo {:bar 1})
+      {:read [{:a [:x]}
+              {:b [:x :y]}
+              :c
+              :d]}
+      :read2])
 
-    ;; Ok, this is cool and all. But what happens when one parses a
-    ;; query with the same read that has different params?
-    '[({:read [:a]} {:param 1})
-      ({:read [:a]} {:param 2})]
-    ;; Should only be a problem for remote queries?
-    ;; (as query params are banned for local reads).
-    ;; Created https://github.com/petterik/lajt/issues/2
-    ))
+  (testing "multiple union selections"
+    (is (= [{:read [:a :b]}]
+           (->> [{:union {:a [{:read [:a]}]
+                          :b [{:read [:b]}]
+                          :c [{:read [:c]}]}}]
+                (parser/dedupe-query {:union-namespaces [:union]
+                                      :union-selector   (fn [_ _ _] [:a :b])}
+                                     *env*)))))
 
-(deftest initializing-parser-plugins-once
-  (let [state (atom 0)
-        plugin {:before (fn [env k p]
-                          (swap! state inc)
-                          env)}]
-    (*parser* (assoc *env* :read-plugins [plugin]
-                           :join-namespace "join")
-              [{:join [:read1 :read2 :read3]}])
-    (is (contains? #{1 4} @state)))
-  (let [state (atom 0)
-        orig parser/recursively-call-joins-plugin]
-    (with-redefs [parser/recursively-call-joins-plugin
-                  (fn [namespaces]
-                    {:before (fn [env k p]
-                               (swap! state inc)
-                               ((:before (orig namespaces)) env k p))})]
-      (*parser* (assoc *env* :join-namespace "join")
-                [{:join [:read1 :read2 :read3]}])
-      ;; It'll be 0 for the eager-parser and 4 for the parser
-      (is (contains? #{0 4} @state)))))
+  (testing "union selections with no query is filtered out"
+    (is (= [:read]
+           (->> [{:union {:a [:read]}}]
+                (parser/dedupe-query {:union-namespaces [:union]
+                                      :union-selector   (constantly [:a :b])}
+                                     *env*)))))
+
+  ;; Ok, this is cool and all. But what happens when one parses a
+  ;; query with the same read that has different params?
+  '[({:read [:a]} {:param 1})
+    ({:read [:a]} {:param 2})]
+  ;; Should only be a problem for remote queries?
+  ;; (as query params are banned for local reads).
+  ;; Created https://github.com/petterik/lajt/issues/2
+  )
 
 
 (comment

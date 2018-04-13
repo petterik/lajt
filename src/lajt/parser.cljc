@@ -153,7 +153,7 @@
                                :ret ::parsed-query))
 (s/def ::query-plugins (s/+ ::query-plugin))
 (s/def ::config (s/keys :req-un [::read ::mutate]
-                        :opt-un [::join-namespace ::union-namespace ::union-selector]))
+                        :opt-un [::join-namespaces ::union-namespaces ::union-selector]))
 (s/def ::env (s/keys :opt [::config ::query-plugins]))
 
 (defn- parse-query [env query]
@@ -169,6 +169,26 @@
                      :query ::query)
         :ret ::parsed-query)
 
+(defn handle-read-mutate-return [{:keys [target] ::keys [expr expr-spec] :as env} k p ret]
+  (if (nil? target)
+    ;; Returning a pair that can be conjed into a {}.
+    [k ret]
+    ;; Handle reads with target
+    (let [true->query #(if (true? %) (s/unform expr-spec expr) %)]
+      (when (some? ret)
+        (cond
+          (true? ret) [(true->query ret)]
+          (sequential? ret) (into [] (map true->query) ret)
+          :else
+          (throw
+            (ex-info
+              (str "Unable to handle return from k: " k
+                   " with :target " target
+                   " return: " ret)
+              {:k      k
+               :ret    ret
+               :target target})))))))
+
 (defn with-plugins-fn [read-or-mutate plugins-key]
   (fn [env k p]
     (let [plugins (get env plugins-key)
@@ -178,7 +198,7 @@
                               (plugin env k (::params env))))
                           (assoc env ::params p)
                           plugins)
-          val ((get env read-or-mutate) env k (::params env))]
+          val (read-or-mutate env k (::params env))]
       (transduce (keep :after)
                  (completing
                    (fn [env plugin]
@@ -188,17 +208,18 @@
                  (assoc env ::return val)
                  plugins))))
 
-(def call-reads-and-mutates
-  (let [call-fns {:read   (with-plugins-fn ::read-fn ::read-plugins)
-                  :mutate (with-plugins-fn ::mutate-fn ::mutate-plugins)}]
+(defn call-reads-and-mutates-fn [read mutate]
+  (let [call-fns {:read   (with-plugins-fn read ::read-plugins)
+                  :mutate (with-plugins-fn mutate ::mutate-plugins)}]
     (fn [env query]
       (let [xf (map (fn [{::keys [type expr expr-spec params key query]}]
-                      (let [env (assoc env :dispatched-by expr
-                                           :expr-spec expr-spec
+                      (let [env (assoc env ::expr expr
+                                           ::expr-spec expr-spec
                                            :query query
                                            ::type type
-                                           ::params params)]
-                        ((get call-fns type) env key params))))
+                                           ::params params)
+                            ret ((get call-fns type) env key params)]
+                        (handle-read-mutate-return env key params ret))))
             query (sort-by (comp {:mutate 0 :read 1} ::type) query)]
         (if (nil? (:target env))
           (->> query
@@ -207,31 +228,6 @@
           (->> query
                (into []
                      (comp xf cat (distinct)))))))))
-
-(def handle-read-mutate-return-plugin
-  {:after
-   (fn [{:keys [target dispatched-by expr-spec] :as env} k p ret]
-     (if (nil? target)
-       ;; Returning a pair that can be conjed into a {}.
-       [k ret]
-       ;; Handle reads with target
-       (let [true->query (fn [x]
-                           (if (true? x)
-                             (s/unform expr-spec dispatched-by)
-                             x))]
-         (when (some? ret)
-           (cond
-             (true? ret) [(true->query ret)]
-             (sequential? ret) (into [] (map true->query) ret)
-             :else
-             (throw
-               (ex-info
-                 (str "Unable to handle return from k: " k
-                      " with :target " target
-                      " return: " ret)
-                 {:k      k
-                  :ret    ret
-                  :target target})))))))})
 
 (def eager-query-parser-plugin
   (fn [env query]
@@ -266,6 +262,47 @@
   ([parsed-query]
    (into [] (parsed-query->query) parsed-query)))
 
+(defn parser
+  "Like parser, but parses unions and joins lazily and more effectively. Stuff it doesn't parse:
+  - Pull patterns of reads.
+  - Every branch of a union."
+  [{:keys  [read mutate read-plugins mutate-plugins query-plugins eager?]
+    :as    config}]
+  (let [call-read-and-mutate (call-reads-and-mutates-fn read mutate)]
+    (fn self
+      ([] config)
+      ([env query target]
+       (self (assoc env :target target) query))
+      ([env query]
+       (s/assert ::query query)
+       (let [env (-> (assoc env ::config config
+                                ::read-plugins read-plugins
+                                ::mutate-plugins mutate-plugins
+                                ::query-plugins query-plugins
+                                ::query->parsed-query (if eager?
+                                                        eager-query-parser-plugin
+                                                        lazy-query-parser-plugin))
+                     ;; Allow the user to have a pointer to the root parser in the env.
+                     (cond-> (nil? (:parser env))
+                             (assoc :parser self)))
+             return (->> (parse-query env query)
+                         (call-read-and-mutate env))]
+         (when (:debug env)
+           (locking *out*
+             (prn "lajt.parser query: " query)
+             (prn "lajt.parser Return: " return)
+             (prn "lajt.parser target: " (:target env))))
+         return)))))
+
+(defn eager-parser
+  "Conforms the whole query - including pull pattern. Takes :read and :mutate keys.
+
+  Deprecated. Here because of never-removing-stuff rule."
+  [config]
+  (parser (assoc config :eager? true)))
+
+;; Deduping query recursively - flattening query
+
 (defn- get-name
   "Takes a keyword or a string and returns the string, namespace or the name of it."
   [k]
@@ -280,106 +317,43 @@
           (map get-name)
           (cond-> names (not (coll? names)) vector))))
 
-(defn recursively-call-joins-plugin [join-namespaces]
-  (let [join-namespaces (name-set join-namespaces)]
-    (if (empty? join-namespaces)
-      identity-plugin-map
-      {:before
-       (fn [env k p]
-         (if-not (and (= :join (first (:dispatched-by env)))
-                      (contains? join-namespaces (get-name k)))
-           env
-           (let [query (:query env)]
-             (assoc env ::read-fn
-                        (fn [env k p]
-                          ((:parser env) env query (:target env)))))))})))
+(defn- flatten-query-xf [env {:keys [join-namespaces union-namespaces union-selector] :as opts}]
+  (let [unions (name-set union-namespaces)
+        joins (name-set join-namespaces)]
+    (if (and (empty? unions)
+             (empty? joins))
+      (map identity)
+      (mapcat (fn self [{::keys [type key expr query params] :as frag}]
+                (cond
+                  (= :mutate type)
+                  [frag]
 
-(defn selects-and-calls-union-plugin [union-namespaces union-selector]
-  (let [union-namespaces (name-set union-namespaces)]
-    (if (empty? union-namespaces)
-      identity-plugin-map
-      {:before
-       (fn [env k p]
-         (if-not (and (= :union (first (:dispatched-by env)))
-                      (contains? union-namespaces (get-name k)))
-           env
-           (let [_ (when (nil? union-selector)
-                     (throw (ex-info "Dispatching on union-namespace but :union-selector was nil!"
-                                     {:key           k
-                                      :dispatched-by (:dispatched-by env)})))
-                 selected-path (union-selector env k p)
-                 query (get-in env [:query selected-path])]
-             (if (nil? query)
-               (do (prn "WARN: no path in query found with union-selected path: " selected-path
-                        " in union-map: " (:query env))
-                   env)
-               (assoc env ::read-fn
-                          (fn [env k p]
-                            ((:parser env) env query (:target env))))))))})))
+                  (and (= :join (first expr))
+                       (contains? joins (get-name key)))
+                  (eduction
+                    (mapcat self)
+                    ((::query->parsed-query env) env query))
 
-(defn nice-to-have-read-plugins [{:keys [join-namespace union-namespace union-selector]}]
-  (concat
-    (when join-namespace
-      [(recursively-call-joins-plugin join-namespace)])
-    (when union-namespace
-      [(selects-and-calls-union-plugin union-namespace union-selector)])))
+                  (and (= :union (first expr))
+                       (contains? unions (get-name key)))
+                  (let [unions (union-selector (assoc env :query query) key params)]
+                    (if (nil? unions)
+                      (prn "WARN: :union-selector returned nil for key " key
+                           " will leave out union from the query.")
+                      (let [unions (cond-> unions (keyword? unions) vector)]
+                        (if (not-any? #(contains? query %) unions)
+                          (prn "WARN: queries in union found with union-selected path(s): " unions
+                               " for key: " key
+                               " in union-map: " query
+                               ". Will leave out union from the query.")
+                          (eduction
+                            (keep #(get query %))
+                            (mapcat #((::query->parsed-query env) env %))
+                            (mapcat self)
+                            unions)))))
 
-(defn parser
-  "Like parser, but parses unions and joins lazily and more effectively.
-  Takes:
-   * :join-namespace <string or keyword>,
-                     specifying a namespace to recursively
-                     parse the join, not calling `read`.
-   * :union-namespace <string or keyword>,
-                      specifying a namespace to recursively
-                      parse only a selected union(path).
-   * :union-selector <3-arity fn>,
-                     Passed [env k p], same as `read`.
-                     Returns a key in the union and only that
-                     part of the union is parsed.
-
-  Stuff it doesn't parse:
-  - Pull patterns of reads.
-  - Every branch of an union. Only the selected one(s)."
-  [{:keys  [read mutate read-plugins mutate-plugins query-plugins eager?]
-    :as    config}]
-  (fn self
-    ([] config)
-    ([env query target]
-     (self (assoc env :target target) query))
-    ([env query]
-     (s/assert ::query query)
-     (let [env (-> (assoc env ::config config
-                              ::initialized? true
-                              ::read-fn read
-                              ::mutate-fn mutate
-                              ::read-plugins (concat read-plugins
-                                                     (nice-to-have-read-plugins config)
-                                                     [handle-read-mutate-return-plugin])
-                              ::mutate-plugins (concat mutate-plugins
-                                                       [handle-read-mutate-return-plugin])
-                              ::query-plugins query-plugins
-                              ::query->parsed-query (if eager?
-                                                      eager-query-parser-plugin
-                                                      lazy-query-parser-plugin))
-                   ;; Allow the user to have a pointer to the root parser in the env.
-                   (cond-> (nil? (:parser env))
-                           (assoc :parser self)))
-           return (->> (parse-query env query)
-                       (call-reads-and-mutates env))]
-       (when (:debug env)
-         (locking *out*
-           (prn "lajt.parser query: " query)
-           (prn "lajt.parser Return: " return)
-           (prn "lajt.parser target: " (:target env))))
-       return))))
-
-(defn eager-parser
-  "Conforms the whole query - including pull pattern. Takes :read and :mutate keys.
-
-  Deprecated. Here because of never-removing-stuff rule."
-  [config]
-  (parser (assoc config :eager? true)))
+                  :else
+                  [frag]))))))
 
 ;; Merging queries
 
@@ -471,129 +445,39 @@
   (-> (query->pattern-map query)
       (pattern-map->query)))
 
-#_(defn flatten-joins-xf [env join-namespaces]
-  (if-let [join-namespaces (not-empty (name-set join-namespaces))]
-    (mapcat (fn [{::keys [type key expr query] :as frag}]
-              (if (and (= :read type)
-                       (= :join (first expr))
-                       (contains? join-namespaces (get-name key)))
-                ;; TODO: Needs to be recursive.
-                (eduction
-                  (flatten-joins-xf env join-namespaces)
-                  ((::query->parsed-query env) env query))
-                [frag])))
-    (map identity)))
+(defn dedupe-query-plugin
+  "Flattens a query, merging pull-patterns. Will walk joins and select paths from unions.
+  Takes:
+  :join-namespaces <string or keyword>
+  :union-namespaces <string or keyword>
+  :union-selector <3-arity fn>
 
-#_(defn flatten-unions-xf [env union-namespaces union-selector]
-  (if-let [union-namespaces (not-empty (name-set union-namespaces))]
-    (mapcat (fn [{::keys [type key expr query params] :as frag}]
-              (if (and (= :read type)
-                       (= :union (first expr))
-                       (contains? union-namespaces (get-name key)))
-                (let [selected-path (union-selector (assoc env :query query) key params)]
-                  (if-some [selected-query (get query selected-path)]
-                    (eduction
-                      (flatten-unions-xf env union-namespaces union-selector)
-                      ((::query->parsed-query env) env selected-query))
-                    (do (prn "WARN: no path in query found with union-selected path: "
-                             selected-path " in union-map: " query)
-                        [frag])))
-                [frag])))
-    (map identity)))
-
-(defn flatten-query-xf [env {:keys [join-namespace union-namespace union-selector] :as opts}]
-  (let [unions (name-set union-namespace)
-        joins (name-set join-namespace)]
-    (if (and (empty? unions)
-             (empty? joins))
-      (map identity)
-      (mapcat (fn [{::keys [type key expr query params] :as frag}]
-                (cond
-                  (= :mutate type)
-                  [frag]
-
-                  (and (= :join (first expr))
-                       (contains? joins (get-name key)))
-                  (eduction
-                    (flatten-query-xf env opts)
-                    ((::query->parsed-query env) env query))
-
-                  (and (= :union (first expr))
-                       (contains? unions (get-name key)))
-                  (let [selected-path (union-selector (assoc env :query query) key params)]
-                    (if-some [selected-query (get query selected-path)]
-                      (eduction
-                        (flatten-query-xf env opts)
-                        ((::query->parsed-query env) env selected-query))
-                      (do (prn "WARN: no path in query found with union-selected path: "
-                               selected-path " in union-map: " query)
-                          [frag])))
-
-                  :else
-                  [frag]))))))
-
-#_(defn flatten-joins-plugin [join-namespaces]
-  (let [join-namespaces (name-set join-namespaces)]
-    (if (empty? join-namespaces)
-      identity-plugin
-      (fn [env query]
-       (into []
-             (mapcat (fn [{::keys [type key expr query] :as frag}]
-                       (if (and (= :read type)
-                                (= :join (first expr))
-                                (contains? join-namespaces (get-name key)))
-                         ;; TODO: Needs to be recursive.
-                         (parse-query env query)
-                         [frag])))
-             query)))))
-
-#_(defn flatten-unions-plugin [union-namespaces union-selector]
-  (let [union-namespaces (name-set union-namespaces)]
-    (when (nil? union-selector)
-      (throw (ex-info ":union-selector was nil"
-                      {:union-namespaces union-namespaces})))
-    (if (empty? union-namespaces)
-      identity-plugin
-      (fn [env query]
-        (into []
-              (mapcat (fn [{::keys [type key expr query params] :as frag}]
-                        (if (and (= :read type)
-                                 (= :union (first expr))
-                                 (contains? union-namespaces (get-name key)))
-                          (let [selected-path (union-selector (assoc env :query query) key params)]
-                            (if-some [selected-query (get query selected-path)]
-                              (parse-query env selected-query)
-                              (do (prn "WARN: no path in query found with union-selected path: "
-                                       selected-path " in union-map: " query)
-                                  [frag])))
-                          [frag])))
-              query)))))
-
-(def dedupe-query-plugin
-  (fn [{::keys [config] :as env} parsed-query]
+  The :union-selector is passed [env k p], same as `read`, and returns a single multiple paths
+  in the union to be kept in the flattened query."
+  [flatten-query-opts]
+  (fn [env parsed-query]
     (into (filterv (comp #{:mutate} ::type) parsed-query)
           (->> parsed-query
                (eduction
                  (filter (comp #{:read} ::type))
-                 (flatten-query-xf env config)
+                 (flatten-query-xf env flatten-query-opts)
                  (parsed-query->query))
                (vec)
                (merge-read-queries)
                ((::query->parsed-query env) env)))))
 
-
-;; Deduping query recursively
 (defn dedupe-query
   "Takes a parser and a query, returns a new query where the reads
   have merged pull patterns.
 
-  Old. Please use the query-plugin if you're using lajt.parser/parser"
+  Old. Please use the dedupe-query-plugin if you're using lajt.parser/parser"
   [parser-or-config env query]
-  (let [env (assoc env ::query->parsed-query lazy-query-parser-plugin
-                       ::query-plugins [dedupe-query-plugin]
-                       ::config (if (fn? parser-or-config)
-                                  (parser-or-config)
-                                  parser-or-config))]
+  (let [config (if (fn? parser-or-config)
+                 (parser-or-config)
+                 parser-or-config)
+        env (assoc env ::query->parsed-query lazy-query-parser-plugin
+                       ::query-plugins [(dedupe-query-plugin config)]
+                       ::config config)]
     (->> (parse-query env query)
          (parsed-query->query))))
 
