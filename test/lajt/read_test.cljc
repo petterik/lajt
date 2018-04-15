@@ -114,7 +114,20 @@
     (is (apply > (read-query
                    {:query '{:find  [[?e ...]]
                              :where [[?e :person/first-name]]}
-                    :sort  {:order :decending}})))))
+                    :sort  {:order :decending}}))))
+  (testing ":sort-key gets put in the remote pull-pattern"
+    (let [reads {:read {:query  '{:find  [[?e ...]]
+                                  :where [[?e :person/first-name]]}
+                        :sort   {:key-fn :person/last-name}
+                        :remote true}}]
+      (is (= [{:read [:person/last-name]}]
+             (*parser* {:reads reads
+                        :target :remote}
+                       [:read])))
+      (is (= [{:read [:person/first-name :person/last-name]}]
+             (*parser* {:reads reads
+                        :target :remote}
+                       [{:read [:person/first-name]}]))))))
 
 (deftest reads-depending-on-other-reads
   (let [reads

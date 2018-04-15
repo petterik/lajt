@@ -1,6 +1,7 @@
 (ns lajt.read
   (:require
-    [lajt.read.ops :as ops]))
+    [lajt.read.ops :as ops]
+    [clojure.spec.alpha :as s]))
 
 (def default-ops
   {:pre     [:case :depends-on :params :before]
@@ -96,16 +97,41 @@
           {t ret}
           {:value ret})))))
 
-(defn perform-remote [{:keys [target] :as env}]
+(defn perform-remote [{:keys [target]
+                       ;; Using some internals
+                       :lajt.parser/keys [expr expr-spec merge-queries]
+                       :as env}]
   (let [env (perform-pre-ops env)
         read-map (:read-map env)
         ret (get read-map target)
+        ;; Value of :remote can be a function or a vector of functions:
         ret (cond-> ret
                     (not (or (boolean? ret) (nil? ret)))
                     (ops/call-fns env))
-        ret (when ret
-              (cond-> ret (true? ret) vector))
-        deps (:results env)]
+        ;; Wrap it in a sequential collection if it isn't already.
+        ;; We're able to return multiple remote queries.
+        ret (cond-> ret
+                    (not (sequential? ret))
+                    vector)
+        ;; If the value is true, unform the expression to its original form.
+        ;; Remove falsey values.
+        ret (into []
+                  (comp (filter boolean)
+                        (map #(if (true? %) (s/unform expr-spec expr) %)))
+                  ret)
+        ;; If we've got any additional pull patterns from any of the ops,
+        ;; add them now.
+        ret (merge-queries ret
+                           ;; TODO: Remove this hack.
+                           ;; Need some remote data pipeline.
+                           ;; Need to remove the hard coded ordering of pre-post ops.
+                           ;; Stuff!
+                           (when (contains? read-map :sort)
+                             (let [env' (ops/call env :sort (get read-map :sort))
+                                   q (:remote-query (ops/get-scoped env' ::ops/sort))]
+                               q)))
+        ;; Get the dependencies from the results of :depends-on
+        deps (::ops/results env)]
     (into (vec deps) ret)))
 
 (defn ->read-fn [lajt-reads db-fns]

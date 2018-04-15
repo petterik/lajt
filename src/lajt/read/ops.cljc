@@ -12,41 +12,65 @@
 (defn assoc-scoped [env k v]
   (assoc-in env [k (:read-key env)] v))
 
+(defn update-scoped [env k & args]
+  (apply update-in env [k (:read-key env)] args))
+
 (defn get-scoped [env k]
   (get-in env [k (:read-key env)]))
 
 (defn add-result
   "Adds a result to env. Convenicence function for actions."
   [env res]
-  (assoc-scoped env :results res))
+  (assoc-scoped env ::results res))
 
 (defn get-result
   [env]
-  (get-scoped env :results))
+  (get-scoped env ::results))
 
 (defn remove-pull [env]
   (update env :read-map dissoc ::pull))
 
+(def dispatch (fn [env k v] k))
+
 ;; ############
-;; Ops
+;; Remote data
+;; TODO: We might want to move this out to its own namespace.
 
-(defmulti call-op (fn [env k v] k) :default ::default)
+(defmulti remote-data dispatch :default ::default)
 
-(defmethod call-op ::default
+(defmethod remote-data ::default
   [env k v]
   (throw (ex-info (str "No read-op for key: " k)
                   {:key k :value v :query (:query env)})))
+
+;; Hmm, maybe we want
+{:pre (fn [])
+ :remote (fn [])
+ :post-action (fn [])
+ :deps {:pre []
+        :post-action []
+        :remote []}}
+{:action (fn [])}
+
+;; ############
+;; Ops
+(defmulti call-op dispatch :default ::default)
 
 (defmethod call-op :depends-on
   [env _ v]
   (let [query (if (fn? v) (v env) v)
         res ((:parser env) env query (:target env))
         env (if (some? (:target env))
-              (update env :results (fnil into []) res)
-              (update env :results merge res))]
+              (update env ::results (fnil into []) res)
+              (update env ::results merge res))]
     ;; Assoc the :depends-on key with all results
     ;; such reads can access it easily.
-    (assoc env :depends-on (:results env))))
+    (assoc env :depends-on (::results env))))
+
+
+(defmethod remote-data :depends-on
+  [env k v]
+  (vec (:results env)))
 
 (defn call-fns
   "Calls a single function or a vector of functions with the env."
@@ -114,26 +138,30 @@
 (defmethod call-op :sort
   [env _ sort-map]
   (let [result (get-result env)
+        {:keys [comparator key-fn order entities?]
+         :or   {entities?  true
+                comparator compare}} sort-map
+        comparator (if (= :decending order)
+                     (fn [a b]
+                       (comparator b a))
+                     comparator)
+        !key-fn (if (and (some? key-fn) entities?)
+                 (let [{:keys [entity]} (:db-fns env)
+                       db (:db env)
+                       entity* (memoize #(entity db %))]
+                   (fn [a]
+                     (key-fn (entity* a))))
+                 key-fn)
         ret (if (or (map? result) (not (coll? result)))
               [result]
-              (let [{:keys [comparator key-fn order entities?]
-                     :or   {entities?  true
-                            comparator compare}} sort-map
-                    comparator (if (= :decending order)
-                                 (fn [a b]
-                                   (comparator b a))
-                                 comparator)
-                    key-fn (if (and (some? key-fn) entities?)
-                             (let [{:keys [entity]} (:db-fns env)
-                                   db (:db env)
-                                   entity* (memoize #(entity db %))]
-                               (fn [a]
-                                 (key-fn (entity* a))))
-                             key-fn)]
-                (if (some? key-fn)
-                  (sort-by key-fn comparator result)
-                  (sort comparator result))))]
-    (add-result env ret)))
+              (if (some? !key-fn)
+                (sort-by !key-fn comparator result)
+                (sort comparator result)))]
+    (-> (add-result env ret)
+        (cond-> (and entities? (keyword? key-fn))
+                (assoc-scoped ::sort
+                              {:remote-query
+                               [{(:read-key env) [key-fn]}]})))))
 
 ;; ###############
 ;; Pull implementation

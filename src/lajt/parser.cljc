@@ -262,6 +262,12 @@
   ([parsed-query]
    (into [] (parsed-query->query) parsed-query)))
 
+(declare merge-read-queries)
+(defn merge-queries [query & queries]
+  (if-let [queries (seq (filter seq queries))]
+    (merge-read-queries (into query cat queries))
+    query))
+
 (defn parser
   "Like parser, but parses unions and joins lazily and more effectively. Stuff it doesn't parse:
   - Pull patterns of reads.
@@ -276,6 +282,7 @@
       ([env query]
        (s/assert ::query query)
        (let [env (-> (assoc env ::config config
+                                ::merge-queries merge-queries
                                 ::read-plugins read-plugins
                                 ::mutate-plugins mutate-plugins
                                 ::query-plugins query-plugins
@@ -419,6 +426,9 @@
                   {:map-so-far m :expr expr})))
 
 (defn query->pattern-map [query]
+  (when-not (s/valid? ::query query)
+    (throw (ex-info (str "Spec failed:\n" (s/explain-str ::query query))
+                    (s/explain-data ::query query))))
   (reduce ->pattern-map {} (s/conform ::query query)))
 
 (comment
