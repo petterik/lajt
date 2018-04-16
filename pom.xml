@@ -23,6 +23,11 @@
       <version>0.16.4</version>
     </dependency>
     <dependency>
+      <groupId>com.stuartsierra</groupId>
+      <artifactId>dependency</artifactId>
+      <version>0.2.0</version>
+    </dependency>
+    <dependency>
       <groupId>medley</groupId>
       <artifactId>medley</artifactId>
       <version>1.0.0</version>

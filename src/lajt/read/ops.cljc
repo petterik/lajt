@@ -54,8 +54,11 @@
 
 ;; ############
 ;; Ops
+;; TODO: This def-op stuff is probably bad. Should probably remove it.
+(defmulti def-op (fn [k] k) :default ::default)
 (defmulti call-op dispatch :default ::default)
 
+(defmethod def-op :depends-on [_] {:op-type :op-type/pre})
 (defmethod call-op :depends-on
   [env _ v]
   (let [query (if (fn? v) (v env) v)
@@ -66,11 +69,6 @@
     ;; Assoc the :depends-on key with all results
     ;; such reads can access it easily.
     (assoc env :depends-on (::results env))))
-
-
-(defmethod remote-data :depends-on
-  [env k v]
-  (vec (:results env)))
 
 (defn call-fns
   "Calls a single function or a vector of functions with the env."
@@ -83,11 +81,13 @@
                           {:call-chain x
                            :env        env})))))
 
+(defmethod def-op :before [_] {:op-type :op-type/pre})
 (defmethod call-op :before
   [env _ v]
   (call-fns v env)
   env)
 
+(defmethod def-op :params [_] {:op-type :op-type/pre})
 (defmethod call-op :params
   [env _ params]
   (assoc env :params
@@ -104,6 +104,7 @@
                      ":params need to be a map or a function."
                      {:params params}))))))
 
+(defmethod def-op :query [_] {:op-type :op-type/action})
 (defmethod call-op :query
   [env k query]
   (let [q-params (:params env)
@@ -127,14 +128,20 @@
                 :params q-params})
         (add-result env res)))))
 
+(defmethod def-op :lookup-ref [_] {:op-type :op-type/action})
 (defmethod call-op :lookup-ref
   [env _ ref]
   (add-result env ((get-in env [:db-fns :entid]) (:db env) ref)))
 
+(defmethod def-op :no-op [_] {:op-type :op-type/action})
 (defmethod call-op :no-op
   [env _ _]
   (remove-pull env))
 
+;; TODO: Make it expand from :sort -> :sort/pre :sort/post :sort/remote
+;; are expansions different from pre?
+;; why?
+(defmethod def-op :sort [_] {:op-type :op-type/post})
 (defmethod call-op :sort
   [env _ sort-map]
   (let [result (get-result env)
@@ -232,6 +239,7 @@
                     ;; TODO: env->ex-data
                     {:read-map read-map}))))
 
+(defmethod def-op ::pull [_] {:op-type :op-type/post})
 (defmethod call-op ::pull
   [{:keys [read-map] :as env} _ query]
   (let [pull-type (pull-type env read-map)
@@ -450,8 +458,27 @@
                     ~v))
                (partition 2 body)))))
 
-  (defop :sort [env k v]
-         :pre (let [])
-         :post (let [])
-         ())
+  ;; get it to work with multimethods.
+  ;; write macro with specs for arguments.
+  ;; done.
+
+  ;; Or, we could just flatten everything out.
+  ;; :sort is an expanding op that expands to
+  ;; :sort/pre
+  ;; :sort/post
+  ;; :sort/remote
+
+  ;; Everytime an expansion happens, the dependencies are re-calculated.
+  ;; Should there be an expanding-op thing?
+  ;; Or just ops as per ush
+
+  ;; This should be a thing
+  (defmulti op-dependency (fn [k] k) :default ::default)
+  (defmethod op-dependency :sort
+    []
+    {:op-type :op-type/expansion
+     ::depends-on [:case]})
+  :op-types #{:op-type/expansion :op-type/pre :op-type/action
+               :op-type/remote :op-type/post}
+
   )
