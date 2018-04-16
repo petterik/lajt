@@ -126,6 +126,9 @@
                            ;; Need some remote data pipeline.
                            ;; Need to remove the hard coded ordering of pre-post ops.
                            ;; Stuff!
+                           ;; TODO: Using multiple defmulti's seem like a good idea?
+                           ;; Or is protocols better?
+                           ;; defop (reify IPre IPost IAction IRemoteData ILocalData).
                            (when (contains? read-map :sort)
                              (let [env' (ops/call env :sort (get read-map :sort))
                                    q (:remote-query (ops/get-scoped env' ::ops/sort))]

@@ -387,4 +387,71 @@
                            " did not return a map."
                            " Must return a new environment")
                       {:op k :val v})))
-    ret))
+    ret)
+
+
+  {:sort
+   {:pre (fn [])
+    :post (fn [])
+    :post-deps [:action]
+    :remote (fn [])
+    :remote-deps [:pre]}}
+
+  {:deps {:pre nil
+          :post [:target]
+          :remote [:pre]
+          :action [:pre]}}
+
+  ;; Options:
+  ;; 1. Define everything as multimethods
+  ;; - these multimethods would have well defined semantics.
+  ;; - pre-op are called first
+  ;; - actions are called after all pre-ops.
+  ;; - post-ops are called after actions or remote data
+  ;; How there's also a dependency multimethod where one can specify ones dependencies?
+  ;; so sort would be this mess:
+  (defmethod pre-op :sort [_] :IMPLEMENTATION)
+  (defmethod post-op :sort [_] :IMPLEMENTATION)
+  (defmethod remote-op :sort [_] :IMPLEMENTATION)
+  (defmethod dependencies :sort [_] :IMPLEMENTATION)
+
+
+
+  (defprotocol IPreOp
+    (pre [this env v]))
+  (defprotocol IPostOp
+    (pre [this env v]))
+  (defprotocol IDependOnOps
+    (pre [this env v]))
+  (defprotocol IAction
+    (pre [this env v]))
+  (defprotocol IRemote
+    ())
+
+  ;; :sort
+  (reify
+    IPreOp
+    (pre [this env v])
+    IPostOp
+    ()
+    ;; got tired of typing...
+    )
+
+  ;; Or we could just write a macro around the multimethods
+  (let [k->op {:pre pre-op
+               :post post-op
+               ;; ...
+               }]
+    (defmacro defop [op-id args & body]
+     `(do
+        ~@(map (fn [[k v]]
+                 `(defmethod ~(get k->op k) ~op-id
+                    ~args
+                    ~v))
+               (partition 2 body)))))
+
+  (defop :sort [env k v]
+         :pre (let [])
+         :post (let [])
+         ())
+  )
