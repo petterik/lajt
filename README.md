@@ -28,7 +28,7 @@ With om.next and Fulcro we're managing our state with maps that form a database 
 
 ### Differences
 - Low flexibility for client <-> server communication, since server must always match the shape of the query. Which might not be a bad thing.
-- Datalog app states can be queried with datalog. Fulcro and om.next need to write custom functions to navigate their app-state. Or maybe there's a specter or datalog query engine for om.next default db format now? 🤷‍♂️
+- Datascript app states can be queried with datalog. Fulcro and om.next need to write custom functions to navigate their app-state. Or maybe there's a specter or datalog query engine for om.next default db format now? 🤷‍♂️
 - Very easy to model a delete for Datascript for both cardinality one and many. In Fulcro and om.next, I don't know?
 - Very little "read" or "parser" code is needed for om.next and Fulcro. The data must match the shape of the query, but when it does, you just need to write your component queries and you're done. For Datascript, every "root node" of your query will need to be defined. The queries might also need more data than what you're components have defined.
 
