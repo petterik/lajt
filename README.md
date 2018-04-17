@@ -52,7 +52,7 @@ The goal with the library is to:
 - Clojure and ClojureScript library, so that you can use it for server side datomic queries as well as frontend queries. Which also makes it easy to use for SSR.
 - Async parser for front- and backend.
 
-Lajt will work with om.next and I'll integrate it with [sulolive(https://github.com/eponai/sulolive)] to use as a proof-of-concept in a non-trivial application. I would like it to work with qlkit and future om.next like libraries, but that's a later problem.
+Lajt will work with om.next and I'll integrate it with [sulolive](https://github.com/eponai/sulolive) to use as a proof-of-concept in a non-trivial application. I would like it to work with qlkit and future om.next like libraries, but that's a later problem.
 
 #### UX
 I'm hoping the user/developer experience for this library will be to replace the om.next or qlkit parser and define your reads something like this:
@@ -72,9 +72,8 @@ I'm hoping the user/developer experience for this library will be to replace the
   ;; ...
   }})
 ```
-`:query` and `:params` is defined in the `lajt.read.ops` namespace. The library will come with enough operations to describe the [sulolive(https://github.com/eponai/sulolive)] app's reads, but if you need to define your own, you can. The order in which the `ops` are run is defined in the `lajt.read.deps` namespace using stuartsierra's dependency library.
-I feel like I'm getting into the implementation details now, so I'll stop here. If you want to see a bunch more reads, see the on-going sulolive integration which currently contains both its old reads and the lajt reads:
-https://github.com/eponai/sulolive/blob/petter/lajt-integration/src/eponai/client/parser/read.cljc
+`:query` and `:params` is defined in the `lajt.read.ops` namespace. The library will come with enough operations to describe the [sulolive](https://github.com/eponai/sulolive) app's reads, but if you need to define your own, you can. The order in which the `ops` are run is defined in the `lajt.read.deps` namespace using stuartsierra's dependency library.
+I feel like I'm getting into the implementation details now, so I'll stop here. If you want to see a bunch more reads, see the on-going sulolive integration which currently contains both its old reads and the lajt reads. [sulolive client reads.cljc](https://github.com/eponai/sulolive/blob/petter/lajt-integration/src/eponai/client/parser/read.cljc)
 
 If you think this is interesting work, please let me know (or star) to help motivate me.
 
