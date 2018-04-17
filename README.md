@@ -1,16 +1,56 @@
 # lajt
 
-Declarative datascript UI with om.next like libraries.
+Declarative parser library for creating applications with DataScript and om.next like libraries.
 
 ## Rationale
-Library that aims to make creating UI's with datascript with om.next like libraries easier, better and faster.
+Library that aims to make creating UI's with datascript with om.next like libraries easier, better and faster. Lajt is a parser library, that fixes correctness and performance issues when using DataScript with om.next like libraries.
 
-Library will feature a declarative parser.
-The parser will make it possible to create a reactive-like UI, where whenever data changes in the datascript store, the UI components that need updating will be updated.
+### Correctness:
+ When using DataScript is used as an app-state, the queries that is sent remotely needs to contain data that's required to perform the parser/read queries.
+ For example: Let's say there's a UI for rendering people with a country filter. The component and its query could look something like this:
+ ```clj
+ (defui PeopleByCountry
+   static om/IQuery
+   (query [this]
+     [{:query/people-by-selected-country [:person/first-name]}])
+ ;; ...
+ )
+ ```
+ Let's say the definition of `:query/people-by-country` looks at the attribute `:person/location` and `:location/country` to determine whether the person should be included in the filter or not. The datalog query might look something like this:
+ ```clj
+ '{:find [[?e ...]]
+   :where [[?e :person/location ?loc]
+           [?loc :location/country ?country]]
+   :in [$ ?country]
+  }
+ ```
+ In this case, it wouldn't be enough to just send the query as is to the remote, as it would only pull `:person/first-name` to the client. We also need `:person/location` and `:location/country`. The correct query to send remote would be:
+ ```clj
+ [{:query/people-by-selected-country
+   [:person/first-name {:person/location [:location/country]}]}]
+ ```
+What we did in sulolive to solve this problem was to include these attributes in the component queries, which is not what you want to do.
 
-The declarative parser might solve some problems with remote data fetching, as using datascript causes different problems as the default db format om.next uses.
+This library aims to solve this problem. It'll look at the queries and other `lajt.read.ops` and include all the required attributes in the remote queries.
 
-👷 Library is still in its initial design phase.
+### Performance
+
+Lajt cache a lot of query results to incrementally update them when possible.
+- Running queries only if it contains an attribute that matches a DataScript datom change since the last read.
+-  Incrementally updating `pull` and `pull-many` results
+And maybe:
+- Re-ordering where clauses and injecting only the changed datoms since last read, where it makes sense.
+And maybe:
+- Writing a query engine taking inspiration from [arrdem/shelving](https://github.com/arrdem/shelving/tree/develop/src/main/clj/shelving/query) where the query returns a transducer. Mostly for fun.
+
+### Ease
+
+In addition to correctness and performance, Lajt has some features to make it easier to write parts of the query processing.
+- `pull` and `pull-many` is called implicitly. If the query is called with a pull-pattern it'll call the correct one.
+- Lajt makes it possible to depend on other reads, to avoid duplicating of code and making parsing more performant.
+- Deduping and flattening the query. There are good reasons why one wants to dedupe  and flatten the query before processing it. One of them is [a bug in om.next](https://github.com/omcljs/om/issues/869) and another is to only process each read once.
+  - When deduping the query one wants to select only the path the route cares for (routing) and one also wants to get rid of joins that is only there to include component's children's queries. Lajt makes this part easy.
+- One can easily write one owns lajt operations (or `ops`) and hook in to caching mechanisms (WIP).
 
 ## A case for using DataScript with om.next like client libraries
 #### Or: Client app state management with a client database
