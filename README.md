@@ -7,7 +7,7 @@ WIP - pre-alpha 👷
 ## Rationale
 Library that aims to make creating UI's with datascript with om.next like libraries easier, better and faster. Lajt is a parser library, that fixes correctness and performance issues when using DataScript with om.next like libraries.
 
-### Correctness:
+### Correctness
  When using DataScript is used as an app-state, the queries that is sent remotely needs to contain data that's required to perform the parser/read queries.
  For example: Let's say there's a UI for rendering people with a country filter. The component and its query could look something like this:
  ```clj
@@ -40,8 +40,10 @@ This library aims to solve this problem. It'll look at the queries and other `la
 Lajt cache a lot of query results to incrementally update them when possible.
 - Running queries only if it contains an attribute that matches a DataScript datom change since the last read.
 -  Incrementally updating `pull` and `pull-many` results
+
 And maybe:
 - Re-ordering where clauses and injecting only the changed datoms since last read, where it makes sense.
+
 And maybe:
 - Writing a query engine taking inspiration from [arrdem/shelving](https://github.com/arrdem/shelving/tree/develop/src/main/clj/shelving/query) where the query returns a transducer. Mostly for fun.
 
