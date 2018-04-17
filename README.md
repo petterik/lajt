@@ -2,6 +2,8 @@
 
 Declarative parser library for creating applications with DataScript and om.next like libraries.
 
+WIP - pre-alpha 👷
+
 ## Rationale
 Library that aims to make creating UI's with datascript with om.next like libraries easier, better and faster. Lajt is a parser library, that fixes correctness and performance issues when using DataScript with om.next like libraries.
 
