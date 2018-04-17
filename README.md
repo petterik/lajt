@@ -12,8 +12,7 @@ The declarative parser might solve some problems with remote data fetching, as u
 
 👷 Library is still in its initial design phase.
 
-## Motivation
-### A case for using DataScript with om.next like client libraries
+## A case for using DataScript with om.next like client libraries
 #### Or: Client app state management with a client database
 #### Or: Any sufficiently complicated client app state contains an ad hoc informally-specified bug-ridden slow implementation of half of a database.
 
