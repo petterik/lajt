@@ -76,8 +76,8 @@ Note: There are cases when you do need a parser in Fulcro, but I'm not experienc
 By having a hard requirement on the shape of the data, om.next and Fulcro makes reading the app-state trivial and the client will always have the data it needs. Datascript clients has a more flexible requirement of the shape of the data, but needs to define each read from the app-state and it'll have to make sure that these reads have all the data they need to be fulfilled. Potentially requesting more data than the component's queries have defined.
 
 It's not clear that the DataScript client is a better approach than the om.next and Fulcro  clients. Having written a fullstack application using DataScript I found it to be quite nice. One of the benefits is that the client acts very much like our Datomic backend. The reads one have to define is very similar (if not the same) as the server reads. So I wanted to explore how to make the creating a DataScript client easier and so far I've created a flexible parser and a library for defining reads declaratively.
-### Goals
 
+### Goals
 The goal with the library is to:
 - Make DataScript clients easier to write. Reads, writes, merge, send, everything.
 - Taking care of all the remote data issues.
@@ -93,7 +93,7 @@ The goal with the library is to:
 
 Lajt will work with om.next and I'll integrate it with [sulolive](https://github.com/eponai/sulolive) to use as a proof-of-concept in a non-trivial application. I would like it to work with qlkit and future om.next like libraries, but that's a later problem.
 
-#### UX
+### UX
 I'm hoping the user/developer experience for this library will be to replace the om.next or qlkit parser and define your reads something like this:
 ```clj
 ;; Defining read :people/with-first-name and :selected/person
@@ -118,7 +118,7 @@ If you think this is interesting work, please let me know (or star) to help moti
 
 ## Usage
 
-FIXME
+WIP.
 
 ## License
 
