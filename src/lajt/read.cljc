@@ -6,7 +6,7 @@
 (def default-ops
   {:pre     [:case :depends-on :params :before]
    :actions [:query :lookup-ref :custom :no-op]
-   :post    [:sort ::ops/pull :after]})
+   :post    [:sort ::ops/pull :lastly]})
 
 (defn- validate-read! [{:keys [read-map read-key] :as env}]
   (when (nil? read-map)

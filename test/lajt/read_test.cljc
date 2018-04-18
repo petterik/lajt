@@ -304,7 +304,7 @@
           {:person/first-name "Diana"}]
         (read-query {:query '{:find  [[?e ...]]
                               :where [[?e :person/first-name]]}
-                     :after [:result (partial sort-by :person/first-name) reverse]}
+                     :lastly [:result (partial sort-by :person/first-name) reverse]}
                     {:pull [:person/first-name]}))))
 
 (deftest custom-action-test

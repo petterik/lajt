@@ -131,10 +131,10 @@
 
 (def unwrap-om-next-mutate-plugin
   {:after (fn [env k p ret]
-            (if-some [t (:target env)]
-              (get ret t)
-              (when-some [a (:action ret)]
-                (a))))})
+             (if-some [t (:target env)]
+               (get ret t)
+               (when-some [a (:action ret)]
+                 (a))))})
 
 ;; query->parsed-query?
 ;; where parsed-query is:

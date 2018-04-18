@@ -351,15 +351,14 @@
     ;; Changes the read-map to be the new merged map.
     (assoc env :read-map read-map)))
 
-(defmethod call-op :after
+(defmethod call-op :lastly
   [env _ calls]
-  ;; :after sets the result to whatever the functions return.
+  ;; :lastly sets the result to whatever the functions return.
   ;; Functions are passed the result as argument.
   (add-result env (call-fns calls env)))
 
 (defmethod call-op :custom
   [env _ custom-fn]
-  ;; :after sets the result to whatever the functions return.
   ;; Functions are passed the result as argument.
   (add-result env (custom-fn env)))
 
