@@ -9,6 +9,96 @@
 
 (def ^:dynamic *debug*)
 
+(def ops (atom {}))
+
+(s/def :op/type #{:op.type/setup
+                  :op.type/action
+                  :op.type/transform
+                  ;; Special type can depend on the op.types them selves.
+                  :op.type/special
+                  ;; Remote type for returning remote data.
+                  :op.type/remote
+                  })
+(s/def :op/key keyword?)
+(s/def :op/dependents (s/+ keyword?))
+(s/def :op/depends-on (s/+ keyword?))
+;; Spec ::env somewhere such that we can have rules on what the different
+;; :op/types are allowed/not allowed to do?
+;; ::env is spec'ed in lajt.parser, but we should probably put it some where
+;; better.
+;; I feel I'm not getting a lot of value from clojure.spec right now.
+;; Should probably be using instrument somewhere.
+(s/def :op/fn (s/fspec :args (s/cat :env map? :value any?) :ret map?))
+(s/def ::op (s/keys :req [:op/key :op/type :op/fn]
+                    :opt [:op/dependents
+                          :op/depends-on]))
+
+(defn def-op! [m]
+  (when-not (s/valid? ::op m)
+    (throw (ex-info (s/explain-str ::op m)
+                    (s/explain-data ::op m))))
+  (if-let [k (:op/key m)]
+    (swap! ops assoc k m)
+    (prn "WARN: Op was not registered, as it missed :op/key. Was: " m)))
+
+(defprotocol IOpStage
+  (dependents [this])
+  (depends-on [this])
+  (stage-type [this])
+  (call-stage [this env value]))
+
+(extend-protocol IOpStage
+  #?@(:clj
+      [clojure.lang.AFn
+       (dependents [this] [])
+       (depends-on [this] [])
+       (stage-type [this] (this))
+       (call-stage [this env value]
+         (this env value))
+       clojure.lang.APersistentMap
+       (dependents [this] (:op/dependents this))
+       (depends-on [this] (:op/depends-on this))
+       (stage-type [this] (:op/stage this))
+       (call-stage [this env value]
+         ((:op/fn this) env value))]
+      :cljs
+      [object
+       (dependents [this] (if (map? this) (:op/dependents this) []))
+       (depends-on [this] (if (map? this) (:op/depends-on this) []))
+       (stage-type [this] (if (map? this) (:op/stage this) (this)))
+       (call-stage [this env value]
+                   (if (map? this)
+                     ((:op/fn this) env value)
+                     (this env value)))]))
+
+(defn def-operation [op-key & args]
+  ())
+
+(def-operation :sort
+  :op.stage/setup
+  (fn [env value]
+    )
+  :op.stage/transform
+  :op/dependents [:whatever]
+  (fn [env value]
+    ))
+
+{:op/key    :sort
+ :op/stages [{:op/stage      :op.stage/setup
+              :op/dependents []
+              :op/depends-on []
+              :op/fn         (fn [env v])}
+             {:op/stage      :op.stage/transform
+              :op/dependents []
+              :op/depends-on []
+              :op/fn         (fn [env v])}]}
+;; This is all we need for an op right now.
+;; Need to know when it should be run (type).
+;; We need to know if it should depend on other ops.
+;; Need to know if it has other ops depending on it (dependents).
+;; We need to be able to call the op.
+
+
 (defn assoc-scoped [env k v]
   (assoc-in env [k (:read-key env)] v))
 

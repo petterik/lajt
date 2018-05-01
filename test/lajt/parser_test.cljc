@@ -4,9 +4,7 @@
     [lajt.parser :as parser]
     [lajt.read :as read]
     [lajt.read.datascript]
-    [clojure.spec.alpha :as s]
-    [clojure.spec.test.alpha :as st]
-    [clojure.spec.gen.alpha :as gen]))
+    [clojure.spec.alpha :as s]))
 
 (defn- read-mutate-handler [{:keys [query target]} k p]
   (if (some? target)
@@ -103,42 +101,6 @@
     ))
 
 (deftest query-merging
-  (are [query pattern-map] (= pattern-map
-                              (parser/query->pattern-map query))
-    [:a :b] {:a nil :b nil}
-
-    [{:read-key [:a]}] {:read-key {:a nil}}
-    [{:read-key [:a]} {:read-key [:b]}] {:read-key {:a nil :b nil}}
-
-    [{:read-key [:a]} {:read-key [{:a [:x]}]}] {:read-key {:a {:x nil}}}
-    [{:read-key [{:a [:y]}]} {:read-key [{:a [:x]}]}] {:read-key {:a {:x nil :y nil}}}
-    [{:read-key [{:a [:x :y]}]} {:read-key [{:a [:x]}]}] {:read-key {:a {:x nil :y nil}}}
-
-    ;; Params
-    '[(:read-key {:param 1})] {[:read-key {:param 1}] nil}
-    '[({:read-key [:a]} {:param 1})] {[:read-key {:param 1}] {:a nil}}
-    '[({:read-key [:a :b]} {:param 1})
-      ({:read-key [{:a [:x]}]} {:param 1})] {[:read-key {:param 1}] {:a {:x nil} :b nil}}
-
-    ;; Different params don't merge
-    '[({:read-key [:a]} {:param 1})
-      ({:read-key [:a]} {:param 2})] {[:read-key {:param 1}] {:a nil} [:read-key {:param 2}] {:a nil}})
-
-  (is (thrown-with-msg? #?(:clj Exception :cljs js/Error) #"Unions.*not allowed"
-                        (parser/query->pattern-map [{:union {:a [:b]}}])))
-
-
-  (are [pattern-map query] (= query (parser/pattern-map->query pattern-map))
-    {:read-key nil} [:read-key]
-    {:read-key {:a nil}} [{:read-key [:a]}]
-
-    {:read-key {:a nil :b nil}} [{:read-key [:a :b]}]
-
-    ;; Params
-    {[:read-key {:param 1}] nil} '[(:read-key {:param 1})]
-    {[:read-key {:param 1}] {:a nil}
-     [:read-key {:param 2}] {:a nil}} '[({:read-key [:a]} {:param 1}) ({:read-key [:a]} {:param 2})]
-    )
 
   (are [query merged] (= merged (parser/merge-read-queries query))
     [:a :b] [:a :b]
@@ -164,32 +126,7 @@
 
         ;; Joins
         (mapv #(hash-map % [:x]) keyword-vec)
-        (mapv #(hash-map % [:x]) keyword-vec)
-
-        ;; Merged joins with enough entries to cause un-ordered maps.
-        (->> (cycle keyword-vec)
-             (take 100)
-             (map-indexed (fn [i k]
-                            {k [(keyword (str i))]}))
-             (vec))
-
-        ;; Should result in:
-        ;; [{:a [:0 :16 :32 :48 :64 :80 :96]}
-        ;; {:b [:1 :17 :33 :49 :65 :81 :97]}
-        ;; {:c [:2 :18 :34 :50 :66 :82 :98]}
-        ;; {:d [:3 :19 :35 :51 :67 :83 :99]}
-        ;; {:e [:4 :20 :36 :52 :68 :84]}
-        ;; ... etc
-        ;; ]
-        (->> (cycle keyword-vec)
-             (take 100)
-             (map-indexed (fn [i k]
-                            {k [(keyword (str i))]}))
-             (apply parser/merge-ordered-with (fn [a b]
-                                                (into (cond-> a (number? a) [a])
-                                                      (cond-> b (number? b) [b]))))
-             (map (fn [[k v]]
-                    {k v})))))))
+        (mapv #(hash-map % [:x]) keyword-vec)))))
 
 (deftest dedupe-query-test
   (are [query deduped] (= deduped (parser/dedupe-query
@@ -198,7 +135,13 @@
                                      :union-selector   (constantly ::selected)}
                                     *env*
                                     query))
-    [{:join [:read]} {:read [:a]}]
+    [{:join [:read]} {:read [:a]} :read]
+    [{:read [:a]}]
+
+    [:read]
+    [:read]
+
+    [{:read [:a]} :read]
     [{:read [:a]}]
 
     ;; unions, mutations and nested joins. Complex stuff.
@@ -213,7 +156,16 @@
               {:b [:x :y]}
               :c
               :d]}
-      :read2])
+      :read2]
+
+    [{:non-selected/union {:a [:read :read2]}}
+     {:non-selected/union {:a [{:read [:b]} :read3]}}]
+    [{:non-selected/union {:a [{:read [:b]} :read2 :read3]}}]
+
+    [{:non-selected/union {:a [:read]}}
+     {:non-selected/union {:b [:read]}}]
+    [{:non-selected/union {:a [:read]
+                           :b [:read]}}])
 
   (testing "multiple union selections"
     (is (= [{:read [:a :b]}]

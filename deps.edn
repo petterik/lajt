@@ -1,18 +1,19 @@
 {:paths
  ["src"]
  :deps
- {org.clojure/clojure       {:mvn/version "1.10.0-alpha4" :scope "provided"}
-  org.clojure/clojurescript {:mvn/version "1.10.217" :scope "provided"}
-  datascript                {:mvn/version "0.16.4" :scope "provided"}
+ {org.clojure/clojure         {:mvn/version "1.10.0-alpha4" :scope "provided"}
+  org.clojure/clojurescript   {:mvn/version "1.10.217" :scope "provided"}
+  datascript                  {:mvn/version "0.16.4" :scope "provided"}
   com.stuartsierra/dependency {:mvn/version "0.2.0"}
-  medley                    {:mvn/version "1.0.0"}}
+  medley                      {:mvn/version "1.0.0"}}
  :aliases
  {:dev
   {:extra-paths ["env/dev"]}
   :test
   {:extra-paths ["test"]
    :extra-deps  {org.clojure/test.check                 {:mvn/version "0.10.0-alpha2"}
-                 com.clojure-goes-fast/clj-memory-meter {:mvn/version "0.1.0"}}}
+                 com.clojure-goes-fast/clj-memory-meter {:mvn/version "0.1.0"}
+                 expound                                {:mvn/version "0.5.0"}}}
   :cljs-repl
   {:extra-deps {com.bhauman/rebel-readline-cljs {:mvn/version "0.1.1"}}}
   ;; Temp aliases

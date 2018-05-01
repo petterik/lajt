@@ -1,14 +1,22 @@
 (ns lajt.parser
-  (:require [clojure.spec.alpha :as s]
-            [medley.core :as m]))
+  (:require
+    [clojure.spec.alpha :as s]
+    [clojure.spec.gen.alpha :as gen]
+    [medley.core :as m]
+    [clojure.test.check :as tc]))
+
+(defn ?spec-throw [spec x]
+  (when-not (s/valid? spec x)
+    (throw (ex-info (str "Spec failed:\n" (s/explain-str spec x))
+                    (s/explain-data spec x)))))
 
 ;; TODO: Support idents?
 (s/def ::id keyword?)
-(s/def ::read-exprs (s/coll-of ::read-expr :kind vector? :gen-max 3))
+(s/def ::read-exprs (s/coll-of ::read-expr :kind vector? :gen-max 2))
 (s/def ::recursion (s/or :depth nat-int? :unbounded #{'...}))
 (s/def ::join-val (s/or :read-exprs ::read-exprs :recursion ::recursion))
 (s/def ::join (s/map-of ::id ::join-val :count 1 :gen-max 3))
-(s/def ::union-map (s/map-of keyword? ::read-exprs :gen-max 3))
+(s/def ::union-map (s/map-of keyword? ::read-exprs :gen-max 1))
 (s/def ::union (s/map-of ::id ::union-map :count 1 :gen-max 3))
 
 (s/def ::param-expr (s/cat :expr (s/alt :id ::id
@@ -29,7 +37,7 @@
 (s/def ::query-expr (s/or :read ::read-expr
                           :mutate ::mutation-expr))
 
-(s/def ::query (s/coll-of ::query-expr :kind vector?))
+(s/def ::query (s/nilable (s/coll-of ::query-expr :kind vector? :gen-max 3)))
 
 ;; Lazy version of the spec used for parsing/editing/merging.
 ;; Why:
@@ -39,7 +47,7 @@
 ;; the spec for validation, but we need laziness sometimes for speed.
 
 ;; l short for lazy.
-(s/def ::l-query (s/coll-of ::l-query-expr :kind vector?))
+(s/def ::l-query (s/coll-of ::l-query-expr :kind vector? :gen-max 3))
 (s/def ::l-query-expr (s/or :read ::l-read-expr
                             :mutate ::mutation-expr))
 (s/def ::l-read-expr (s/or
@@ -110,6 +118,20 @@
   [env [_ {:keys [expr params]}]]
   (parse (assoc env :params params) expr))
 
+(def lazy-query-parser-plugin
+  (fn [env query]
+    (?spec-throw ::l-query query)
+    (into []
+          (map (partial parse (assoc env ::expr-specs {:read   ::l-read-expr
+                                                       :mutate ::mutation-expr})))
+          (s/conform ::l-query query))))
+
+(defn query->parsed-query
+  ([query]
+   (query->parsed-query {} query))
+  ([env query]
+   (lazy-query-parser-plugin env query)))
+
 (def identity-plugin
   (fn
     ;; query-plugin
@@ -141,20 +163,58 @@
 (s/def ::type #{:read :mutate})
 (s/def ::key (s/or :read keyword?
                    :mutate symbol?))
-(s/def ::expr (s/or :read ::read-expr
-                    :mutate ::mutation-expr))
+(s/def ::expr any?)
 (s/def ::expr-spec #{::mutation-expr ::read-expr ::l-read-expr})
-(s/def ::params map?)
-(s/def ::parsed-query-fragment (s/keys :req [::type ::key ::expr ::expr-spec]
-                                       :opt [::params ::query]))
-(s/def ::parsed-query (s/coll-of ::parsed-query-fragment :kind vector?))
+(s/def ::params (s/nilable map?))
 
-(s/def ::query-plugin (s/fspec :args (s/cat :env map? :query ::parsed-query)
+(s/def ::parsed-query-fragment
+  (s/keys :req [::type ::key ::expr ::expr-spec]
+          :opt [::params ::query]))
+
+(declare parsed-query->query)
+
+(s/def ::parsed-query
+  (s/with-gen
+    (s/coll-of ::parsed-query-fragment :gen-max 3)
+    #(gen/fmap
+      (comp (partial query->parsed-query {}) vec)
+      (s/gen ::query))))
+
+(comment
+  (gen/sample (s/gen ::query))
+  (def queries *1)
+  (def queries (filter seq queries))
+  (->> queries (map (partial query->parsed-query {})))
+  (gen/sample (s/gen ::parsed-query))
+  (gen/sample (gen/fmap (fn [pq] (query->parsed-query {} (parsed-query->query pq)))
+                        (s/gen (s/coll-of ::parsed-query-fragment :gen-max 3)))))
+
+(s/def ::query-plugin (s/fspec :args (s/cat :env (s/keys :req [::query->parsed-query])
+                                            :parsed-query ::parsed-query)
                                :ret ::parsed-query))
-(s/def ::query-plugins (s/+ ::query-plugin))
-(s/def ::config (s/keys :req-un [::read ::mutate]
-                        :opt-un [::join-namespaces ::union-namespaces ::union-selector]))
-(s/def ::env (s/keys :opt [::config ::query-plugins]))
+(s/def ::query-plugins (s/nilable
+                         (s/coll-of ::query-plugin)))
+
+(s/def ::query->parsed-query
+  (s/with-gen ifn? #(s/gen #{query->parsed-query})))
+
+(comment
+  (require '[clojure.spec.gen.alpha :as gen])
+  (map (juxt identity
+             (partial s/conform ::expr))
+       (gen/sample (s/gen ::expr)))
+  )
+
+(s/def ::join-namespaces (s/* keyword?))
+(s/def ::union-namespaces (s/* keyword?))
+(s/def ::union-selector-ret (s/nilable
+                              (s/or :key ::key
+                                    :keys (s/coll-of ::key))))
+(s/def ::union-selector (s/fspec :args (s/cat :env map? :key ::key :params ::params)
+                                 :ret ::union-selector-ret))
+
+(s/def ::config (s/keys :opt-un [::join-namespaces ::union-namespaces ::union-selector]))
+(s/def ::env (s/keys :opt [::query->parsed-query ::config ::query-plugins]))
 
 (defn- parse-query [env query]
   (reduce (fn [query plugin]
@@ -164,7 +224,7 @@
           ((::query->parsed-query env) env query)
           (::query-plugins env)))
 
-(s/fdef parse-query
+#_(s/fdef parse-query
         :args (s/cat :env ::env
                      :query ::query)
         :ret ::parsed-query)
@@ -243,13 +303,6 @@
                             (update ::query #(s/unform ::read-exprs %))
                             (= :union (first expr))
                             (update ::query #(s/unform ::union-map %))))))))))
-
-(def lazy-query-parser-plugin
-  (fn [env query]
-    (eduction
-      (map (partial parse (assoc env ::expr-specs {:read   ::l-read-expr
-                                                   :mutate ::mutation-expr})))
-      (s/conform ::l-query query))))
 
 (defn parsed-query->query
   ([]
@@ -364,96 +417,99 @@
 
 ;; Merging queries
 
-(def largest-number #?(:clj Long/MAX_VALUE :cljs js/Number.MAX_SAFE_INTEGER))
+(def query-fragment->query-root (juxt ::key ::params))
 
-(defn- order-keeping-map
-  ([] {})
-  ([ms]
-   (let [key-order (into {}
-                         (comp (mapcat keys)
-                               (distinct)
-                               (map-indexed #(vector %2 %1)))
-                         ms)]
-     (sorted-map-by #(compare (get key-order %1 largest-number)
-                              (get key-order %2 largest-number))))))
+(defn- query-roots [parsed-query]
+  (when (seq parsed-query)
+    (eduction
+      (comp (map query-fragment->query-root)
+            (distinct))
+      parsed-query)))
 
-(defn merge-ordered-with [f & ms]
-  (let [merge-entry (fn [m e]
-                      (let [k (key e) v (val e)]
-                        (if (contains? m k)
-                          (assoc m k (f (get m k) v))
-                          (assoc m k v))))
-        merge2 (fn [m1 m2]
-                 (reduce merge-entry m1 (seq m2)))]
-    (reduce merge2 (order-keeping-map ms) ms)))
+(defn normalize-query2
+  ([query] (normalize-query2 {} (query->parsed-query query)))
+  ([norm parsed-query]
+   (if (empty? parsed-query)
+     norm
+     (reduce
+       (fn [norm {::keys [key params query]}]
+         (let [norm-key [key params]
+               union? (map? query)]
+           (if union?
+             (let [norm (reduce-kv
+                          (fn [norm _ query]
+                            (let [parsed-query (query->parsed-query query)]
+                              (normalize-query2 norm parsed-query)))
+                          norm
+                          query)]
+               (update norm
+                       norm-key
+                       (fnil update {:key    key
+                                     :params params
+                                     :union? union?})
+                       :unions
+                       (fnil
+                         (fn [unions]
+                          (reduce-kv
+                            (fn [unions union query]
+                              (update unions union
+                                      (fnil into [])
+                                      (remove (set (get unions union)))
+                                      (query-roots
+                                        (query->parsed-query query))))
+                            unions
+                            query))
+                         {})))
+             (let [parsed-query (when (seq query) (query->parsed-query query))
+                   norm (normalize-query2 norm parsed-query)]
+               (update norm
+                       norm-key
+                       (fnil update {:key    key
+                                     :params params
+                                     :union? union?})
+                       :children
+                       (fnil into [])
+                       (remove (set (get-in norm [norm-key :children])))
+                       (query-roots parsed-query))))))
+       norm
+       parsed-query))))
 
-(defn- merge-ordered [& ms]
-  (into (order-keeping-map ms) cat ms))
-
-(defn- assoc-ordered [m k v]
-  (merge-ordered m {k v}))
-
-(defmulti ->pattern-map (fn [env expr] (first expr)))
-(defmethod ->pattern-map :read
-  [m [_ expr]]
-  (->pattern-map m expr))
-
-(defmethod ->pattern-map :join
-  [{::keys [params] :as m} [_ join]]
-  (let [[k [expr-type v]] (first join)]
-    ;; Updates the key which is a pair of key+params.
-    (merge-ordered-with #(merge-ordered-with merge %1 %2)
-                        (dissoc m ::params)
-                        {(cond-> k (some? params) (vector params))
-                         (reduce ->pattern-map (order-keeping-map) v)})))
-
-(defmethod ->pattern-map :id
-  [{::keys [params] :as m} [_ v]]
-  (let [key (cond-> v (some? params) (vector params))]
-    (-> m
-        (dissoc ::params)
-        (assoc-ordered key nil))))
-
-(defmethod ->pattern-map :param-expr
-  [m [_ {:keys [expr params]}]]
-  (->pattern-map (assoc m ::params params) expr))
-
-(defmethod ->pattern-map :union
-  [m expr]
-  (throw (ex-info (str "Unions are not allowed when merging pull patterns."
-                       " Resolve all unions in the query before passing it"
-                       " to this function")
-                  {:map-so-far m :expr expr})))
-
-(defn query->pattern-map [query]
-  (when-not (s/valid? ::query query)
-    (throw (ex-info (str "Spec failed:\n" (s/explain-str ::query query))
-                    (s/explain-data ::query query))))
-  (reduce ->pattern-map {} (s/conform ::query query)))
-
-(comment
-  (query->pattern-map '[(:foo {:a 1})])
-  (query->pattern-map [{:read-key [:a]}])
-  (query->pattern-map [:a :b :c]))
-
-(defn pattern-map->query [pattern-map]
-  (letfn [(kv->pattern-item [[id v]]
-            (let [[k params] (cond-> id (keyword? id) vector)]
-              (cond-> (if (map? v)
-                        {k (mapv kv->pattern-item v)}
-                        k)
-                      (some? params)
-                      (list params))))]
-    (into []
-          (map kv->pattern-item)
-          pattern-map)))
+(defn denormalize-query
+  ([normalized-query]
+   (fn root->query
+     ([root] (root->query #{} root))
+     ([visited root]
+      (let [root->query (partial root->query (conj visited root))
+            {:keys [key params children union? unions]}
+            (get normalized-query root)]
+        (if union?
+          (cond-> {key (m/map-vals #(mapv root->query %) unions)}
+                  (some? params)
+                  (list params))
+          (cond-> key
+                  (and (seq children)
+                       ;; Avoid infinite recursion
+                       (not (contains? visited root)))
+                  (hash-map (mapv root->query children))
+                  (some? params)
+                  (list params)))))))
+  ([query normalized-query]
+   (into []
+         (map (denormalize-query normalized-query))
+         (query-roots (query->parsed-query query)))))
 
 (defn merge-read-queries
-  "Takes a query (without unions), where all the joins corresponds to a `read-root` + a pattern,
-  merges all the patterns for all read-roots and returns a new query."
+  "Takes a query and merges all the patterns for all read-roots and returns a new query."
   [query]
-  (-> (query->pattern-map query)
-      (pattern-map->query)))
+  (let [parsed-query (query->parsed-query query)
+        parsed-query-by-root (group-by query-fragment->query-root
+                                       parsed-query)]
+    (into []
+          (map (fn [root]
+                 (let [parsed-query (get parsed-query-by-root root)]
+                   (let [norm (normalize-query2 {} parsed-query)]
+                     ((denormalize-query norm) root)))))
+          (query-roots parsed-query))))
 
 (defn dedupe-query-plugin
   "Flattens a query, merging pull-patterns. Will walk joins and select paths from unions.
