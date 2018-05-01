@@ -9,95 +9,85 @@
 
 (def ^:dynamic *debug*)
 
-(def ops (atom {}))
+(s/def :lajt.op.stage/id #{:lajt.op.stage/setup
+                           :lajt.op.stage/action
+                           :lajt.op.stage/transform
+                           ;; Special type can depend on the op.types them selves.
+                           :lajt.op.stage/special
+                           ;; Remote type for returning remote data.
+                           :lajt.op.stage/remote})
+(s/def :lajt.op.stage/fn fn?)
+(s/def :lajt.op.stage/dependents (s/coll-of :lajt.op/id))
+(s/def :lajt.op.stage/depends-on (s/coll-of :lajt.op/id))
+(s/def :lajt.op/stage (s/keys :req [:lajt.op.stage/id
+                                    :lajt.op.stage/fn]
+                              :opt [:lajt.op.stage/dependents
+                                    :lajt.op.stage/depends-on]))
+(s/def :lajt.op/stages (s/coll-of :lajt.op/stage))
+(s/def :lajt.op/id keyword?)
+(s/def ::op (s/keys :req [:lajt.op/id :lajt.op/stages]))
 
-(s/def :op/type #{:op.type/setup
-                  :op.type/action
-                  :op.type/transform
-                  ;; Special type can depend on the op.types them selves.
-                  :op.type/special
-                  ;; Remote type for returning remote data.
-                  :op.type/remote
-                  })
-(s/def :op/key keyword?)
-(s/def :op/dependents (s/+ keyword?))
-(s/def :op/depends-on (s/+ keyword?))
-;; Spec ::env somewhere such that we can have rules on what the different
-;; :op/types are allowed/not allowed to do?
-;; ::env is spec'ed in lajt.parser, but we should probably put it some where
-;; better.
-;; I feel I'm not getting a lot of value from clojure.spec right now.
-;; Should probably be using instrument somewhere.
-(s/def :op/fn (s/fspec :args (s/cat :env map? :value any?) :ret map?))
-(s/def ::op (s/keys :req [:op/key :op/type :op/fn]
-                    :opt [:op/dependents
-                          :op/depends-on]))
-
-(defn def-op! [m]
-  (when-not (s/valid? ::op m)
-    (throw (ex-info (s/explain-str ::op m)
-                    (s/explain-data ::op m))))
-  (if-let [k (:op/key m)]
-    (swap! ops assoc k m)
-    (prn "WARN: Op was not registered, as it missed :op/key. Was: " m)))
-
-(defprotocol IOpStage
-  (dependents [this])
-  (depends-on [this])
-  (stage-type [this])
-  (call-stage [this env value]))
-
-(extend-protocol IOpStage
-  #?@(:clj
-      [clojure.lang.AFn
-       (dependents [this] [])
-       (depends-on [this] [])
-       (stage-type [this] (this))
-       (call-stage [this env value]
-         (this env value))
-       clojure.lang.APersistentMap
-       (dependents [this] (:op/dependents this))
-       (depends-on [this] (:op/depends-on this))
-       (stage-type [this] (:op/stage this))
-       (call-stage [this env value]
-         ((:op/fn this) env value))]
-      :cljs
-      [object
-       (dependents [this] (if (map? this) (:op/dependents this) []))
-       (depends-on [this] (if (map? this) (:op/depends-on this) []))
-       (stage-type [this] (if (map? this) (:op/stage this) (this)))
-       (call-stage [this env value]
-                   (if (map? this)
-                     ((:op/fn this) env value)
-                     (this env value)))]))
-
-(defn def-operation [op-key & args]
-  ())
-
-(def-operation :sort
-  :op.stage/setup
-  (fn [env value]
-    )
-  :op.stage/transform
-  :op/dependents [:whatever]
-  (fn [env value]
-    ))
-
-{:op/key    :sort
- :op/stages [{:op/stage      :op.stage/setup
-              :op/dependents []
-              :op/depends-on []
-              :op/fn         (fn [env v])}
-             {:op/stage      :op.stage/transform
-              :op/dependents []
-              :op/depends-on []
-              :op/fn         (fn [env v])}]}
+{:lajt.op/id    :sort
+ :lajt.op/stages [{:lajt.op.stage/id      :op.stage/setup
+                   :lajt.op.stage/dependents []
+                   :lajt.op.stage/depends-on []
+                   :lajt.op.stage/fn         (fn [env v])}
+                  {:lajt.op.stage/id      :op.stage/transform
+                   :lajt.op.stage/dependents []
+                   :lajt.op.stage/depends-on []
+                   :lajt.op.stage/fn         (fn [env v])}]}
 ;; This is all we need for an op right now.
 ;; Need to know when it should be run (type).
 ;; We need to know if it should depend on other ops.
 ;; Need to know if it has other ops depending on it (dependents).
 ;; We need to be able to call the op.
 
+(s/def ::->op-args
+  (s/+ (s/cat :id :lajt.op.stage/id
+              :deps (s/* (s/cat :deps-key #{:lajt.op.stage/dependents
+                                            :lajt.op.stage/depends-on}
+                                :deps (s/or :lajt.op.stage/dependents
+                                            :lajt.op.stage/depends-on)))
+              :fn :lajt.op.stage/fn)))
+
+(defn ->op [id args]
+  {:lajt.op/id
+   id
+   :lajt.op/stages
+   (into []
+         (map (fn [{:keys [id deps] :as stage}]
+                (reduce
+                  (fn [m {:keys [deps-key deps]}]
+                    (update m deps-key
+                            (fnil into [])
+                            (remove (set (get m deps-key)))
+                            (second deps)))
+                  {:lajt.op.stage/id id
+                   :lajt.op.stage/fn (:fn stage)}
+                  deps)))
+         (s/conform ::->op-args args))})
+
+(defonce operations (atom {}))
+
+(defn def-operation! [op-key & args]
+  (let [op (->op op-key
+                 (map #(if (simple-keyword? %)
+                         (keyword "lajt.op.stage" (name %))
+                         %)
+                      args))]
+    (swap! operations assoc (:lajt.op/id op) op)))
+
+(comment
+  (s/conform ::->op-args op-args)
+  (->op :foo op-args)
+  (let [setupf (fn [env value])
+        transformf (fn [env value])]
+    (= (->op [:op.stage/setup
+              setupf
+              :op.stage/transform
+              :op/dependents [:some-other-op]
+              transformf])
+      {})))
 
 (defn assoc-scoped [env k v]
   (assoc-in env [k (:read-key env)] v))
