@@ -75,6 +75,33 @@
         env (perform-op env (get-action env))]
     (perform-post-ops env)))
 
+;; TODO: YOU ARE HERE !
+;; TODO: assoc :result after each transform.
+(def stage-operators {:lajt.op.stage/transform identity})
+
+(defn perform-read2 [env]
+  (let [operations @ops/operations
+        operations-by-op-id (into {}
+                                  (map (juxt :lajt.op/id identity))
+                                  operations)]
+    ;; TODO: Check if the :read-map has changed and restart the thing.
+    (reduce (fn [env op]
+              (if (keyword? op)
+                (assoc env ::execution-stage op)
+                (let [[op-id stage] op
+                      ret ((:lajt.op.stage/fn stage)
+                            env
+                            (get-in env [:read-map op-id]))
+                      stage-op (get stage-operators
+                                    (::execution-stage env)
+                                    identity)]
+                  (stage-op ret))))
+            env
+            (ops/operation-order
+              (vals
+                (select-keys operations-by-op-id
+                             (keys (:read-map env))))))))
+
 (comment
   ;; This might be useful for some type of integration between om.next and our stuff?
   (defn- wrap-query-in-join-ast [env remote-ret]

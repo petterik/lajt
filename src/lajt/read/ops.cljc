@@ -5,9 +5,29 @@
     [medley.core :as m]
     [clojure.spec.alpha :as s]
     [clojure.string :as string]
-    [clojure.spec.gen.alpha :as gen]))
+    [clojure.spec.gen.alpha :as gen]
+    [com.stuartsierra.dependency :as dep]))
 
 (def ^:dynamic *debug*)
+
+(def stage-execution-order
+  [:lajt.op.stage/will-setup
+   :lajt.op.stage/setup
+   :lajt.op.stage/did-setup
+   :lajt.op.stage/action
+   :lajt.op.stage/did-action
+   :lajt.op.stage/transform
+   :lajt.op.stage/did-transform])
+
+(def execution-stages (set stage-execution-order))
+
+(def stage-after
+  (into {} (map vec (partition 2 1 stage-execution-order))))
+
+(def stage-before
+  (into {} (map (comp vec reverse)) stage-after))
+
+(s/def :lajt.op/exeuction-stages execution-stages)
 
 (s/def :lajt.op.stage/id #{:lajt.op.stage/setup
                            :lajt.op.stage/action
@@ -67,7 +87,7 @@
                   deps)))
          (s/conform ::->op-args args))})
 
-(defonce operations (atom {}))
+(defonce operations (atom #{}))
 
 (defn def-operation! [op-key & args]
   (let [op (->op op-key
@@ -75,7 +95,11 @@
                          (keyword "lajt.op.stage" (name %))
                          %)
                       args))]
-    (swap! operations assoc (:lajt.op/id op) op)))
+    (swap! operations conj op)))
+
+;; ############
+;; Impl stuff
+
 
 (comment
   (s/conform ::->op-args op-args)
@@ -87,7 +111,37 @@
               :op.stage/transform
               :op/dependents [:some-other-op]
               transformf])
-      {})))
+      {}))
+  (deref operations)
+  (require '[com.stuartsierra.dependency :as dep])
+  (def g (dep/graph))
+  (defn dependency-graph []
+    (reduce (fn [g [first then]]
+              (dep/depend g then first))
+            (dep/graph)
+            (partition 2 1 stage-execution-order)))
+  (def dep-g (dependency-graph))
+  (= stage-execution-order (dep/topo-sort dep-g))
+
+  (def stage-by-op
+    (into {}
+          (mapcat (fn [{:lajt.op/keys [id stages]}]
+                      (map vector (repeat id) stages)))
+          @operations))
+
+  (reduce-kv (fn [g op {:lajt.op.stage/keys [id depends-on dependents]}]
+               (let [g (reduce #(dep/depend % op %2) g depends-on)
+                     g (reduce #(dep/depend % %2 op) g dependents)]
+                 (cond-> g
+                         (not (= :lajt.op.stage/special id))
+                         (-> (dep/depend op id)
+                             (dep/depend (stage-after id) op)))))
+          dep-g
+          stage-by-op)
+  (def dep-g2 *1)
+  (dep/topo-sort dep-g2)
+
+  )
 
 (defn assoc-scoped [env k v]
   (assoc-in env [k (:read-key env)] v))
@@ -110,45 +164,20 @@
 (defn remove-pull [env]
   (update env :read-map dissoc ::pull))
 
-(def dispatch (fn [env k v] k))
-
-;; ############
-;; Remote data
-;; TODO: We might want to move this out to its own namespace.
-
-(defmulti remote-data dispatch :default ::default)
-
-(defmethod remote-data ::default
-  [env k v]
-  (throw (ex-info (str "No read-op for key: " k)
-                  {:key k :value v :query (:query env)})))
-
-;; Hmm, maybe we want
-{:pre (fn [])
- :remote (fn [])
- :post-action (fn [])
- :deps {:pre []
-        :post-action []
-        :remote []}}
-{:action (fn [])}
-
 ;; ############
 ;; Ops
-;; TODO: This def-op stuff is probably bad. Should probably remove it.
-(defmulti def-op (fn [k] k) :default ::default)
-(defmulti call-op dispatch :default ::default)
 
-(defmethod def-op :depends-on [_] {:op-type :op-type/pre})
-(defmethod call-op :depends-on
-  [env _ v]
-  (let [query (if (fn? v) (v env) v)
-        res ((:parser env) env query (:target env))
-        env (if (some? (:target env))
-              (update env ::results (fnil into []) res)
-              (update env ::results merge res))]
-    ;; Assoc the :depends-on key with all results
-    ;; such reads can access it easily.
-    (assoc env :depends-on (::results env))))
+(def-operation! :depends-on
+  :setup
+  (fn [env v]
+    (let [query (if (fn? v) (v env) v)
+          res ((:parser env) env query (:target env))
+          env (if (some? (:target env))
+                (update env ::results (fnil into []) res)
+                (update env ::results merge res))]
+      ;; Assoc the :depends-on key with all results
+      ;; such reads can access it easily.
+      (assoc env :depends-on (::results env)))))
 
 (defn call-fns
   "Calls a single function or a vector of functions with the env."
@@ -161,94 +190,100 @@
                           {:call-chain x
                            :env        env})))))
 
-(defmethod def-op :before [_] {:op-type :op-type/pre})
-(defmethod call-op :before
-  [env _ v]
-  (call-fns v env)
-  env)
+(def-operation! :before
+  :lajt.op.stage/special
+  :lajt.op.stage/depends-on [:lajt.op.stage/did-setup]
+  :lajt.op.stage/dependents [:lajt.op.stage/action]
+  (fn [env v]
+    (call-fns v env)
+    env))
 
-(defmethod def-op :params [_] {:op-type :op-type/pre})
-(defmethod call-op :params
-  [env _ params]
-  (assoc env :params
-             (when (some? params)
-               (cond
-                 (map? params)
-                 (m/map-vals #(call-fns % env) params)
+(def-operation! :params
+  :setup
+  (fn [env params]
+    (assoc env :params
+               (when (some? params)
+                 (cond
+                   (map? params)
+                   (m/map-vals #(call-fns % env) params)
 
-                 (fn? params)
-                 (params env)
-                 :else
-                 (throw
-                   (ex-info
-                     ":params need to be a map or a function."
-                     {:params params}))))))
+                   (fn? params)
+                   (params env)
+                   :else
+                   (throw
+                     (ex-info
+                       ":params need to be a map or a function."
+                       {:params params})))))))
 
-(defmethod def-op :query [_] {:op-type :op-type/action})
-(defmethod call-op :query
-  [env k query]
-  (let [q-params (:params env)
-        values-set? (every? (comp some? val) q-params)]
-    (if-not values-set?
-      (do
-        (when *debug*
-          (locking *out*
-            (prn "WARN: Not all params were set when executing query: "
-                (:read-key env)
-                " Returning nil.")))
-        env)
-      (let [query (update query :in #(into (vec (or % '[$]))
-                                           (keys q-params)))
-            res (apply (get-in env [:db-fns :q]) query (:db env)
-                       (vals q-params))]
+(def-operation! :query
+  :action
+  (fn [env query]
+    (let [q-params (:params env)
+          values-set? (every? (comp some? val) q-params)]
+      (if-not values-set?
+        (do
+          (when *debug*
+            (locking *out*
+              (prn "WARN: Not all params were set when executing query: "
+                   (:read-key env)
+                   " Returning nil.")))
+          env)
+        (let [query (update query :in #(into (vec (or % '[$]))
+                                             (keys q-params)))
+              res (apply (get-in env [:db-fns :q]) query (:db env)
+                         (vals q-params))]
 
-        #_(prn {:op     k
-                :result res
-                :query  query
-                :params q-params})
-        (add-result env res)))))
+          #_(prn {:op     k
+                  :result res
+                  :query  query
+                  :params q-params})
+          (add-result env res))))))
 
-(defmethod def-op :lookup-ref [_] {:op-type :op-type/action})
-(defmethod call-op :lookup-ref
-  [env _ ref]
-  (add-result env ((get-in env [:db-fns :entid]) (:db env) ref)))
+(def-operation! :lookup-ref
+  :action
+  (fn [env ref]
+    (add-result env ((get-in env [:db-fns :entid]) (:db env) ref))))
 
-(defmethod def-op :no-op [_] {:op-type :op-type/action})
-(defmethod call-op :no-op
-  [env _ _]
-  (remove-pull env))
+(def-operation! :no-op
+  :action
+  (fn [env _]
+    (remove-pull env)))
 
 ;; TODO: Make it expand from :sort -> :sort/pre :sort/post :sort/remote
 ;; are expansions different from pre?
 ;; why?
-(defmethod def-op :sort [_] {:op-type :op-type/post})
-(defmethod call-op :sort
-  [env _ sort-map]
-  (let [result (get-result env)
-        {:keys [comparator key-fn order entities?]
-         :or   {entities?  true
-                comparator compare}} sort-map
-        comparator (if (= :decending order)
-                     (fn [a b]
-                       (comparator b a))
-                     comparator)
-        !key-fn (if (and (some? key-fn) entities?)
-                 (let [{:keys [entity]} (:db-fns env)
-                       db (:db env)
-                       entity* (memoize #(entity db %))]
-                   (fn [a]
-                     (key-fn (entity* a))))
-                 key-fn)
-        ret (if (or (map? result) (not (coll? result)))
-              [result]
-              (if (some? !key-fn)
-                (sort-by !key-fn comparator result)
-                (sort comparator result)))]
-    (-> (add-result env ret)
-        (cond-> (and entities? (keyword? key-fn))
-                (assoc-scoped ::sort
-                              {:remote-query
-                               [{(:read-key env) [key-fn]}]})))))
+(def-operation! :sort
+  :remote
+  (fn [env {:keys [key-fn entities?]
+            :or   {entities?  true}}]
+    (when (and entities? (keyword? key-fn))
+      [{(:read-key env) [key-fn]}]))
+  :transform
+  (fn [env {:keys [comparator key-fn order entities?]
+            :or   {entities?  true
+                   comparator compare}}]
+    (let [result (get-result env)
+          comparator (if (= :decending order)
+                       (fn [a b]
+                         (comparator b a))
+                       comparator)
+          !key-fn (if (and (some? key-fn) entities?)
+                    (let [{:keys [entity]} (:db-fns env)
+                          db (:db env)
+                          entity* (memoize #(entity db %))]
+                      (fn [a]
+                        (key-fn (entity* a))))
+                    key-fn)
+          ret (if (or (map? result) (not (coll? result)))
+                [result]
+                (if (some? !key-fn)
+                  (sort-by !key-fn comparator result)
+                  (sort comparator result)))]
+      (-> (add-result env ret)
+          (cond-> (and entities? (keyword? key-fn))
+                  (assoc-scoped ::sort
+                                {:remote-query
+                                 [{(:read-key env) [key-fn]}]}))))))
 
 ;; ###############
 ;; Pull implementation
@@ -319,21 +354,21 @@
                     ;; TODO: env->ex-data
                     {:read-map read-map}))))
 
-(defmethod def-op ::pull [_] {:op-type :op-type/post})
-(defmethod call-op ::pull
-  [{:keys [read-map] :as env} _ query]
-  (let [pull-type (pull-type env read-map)
-        pull-fn (get-in env [:db-fns pull-type])
-        result (get-result env)]
-    (when (and (some? pull-type) (nil? pull-fn))
-      (throw (ex-info (str "WARN: Cannot perform a pull on a query that"
-                           " was not of :scalar or :collection find-pattern type.")
-                      {:read-map  read-map
-                       :query     query
-                       :pull-type pull-type})))
-    (add-result env (cond->> result
-                             (and (some? result) (some? pull-fn))
-                             (pull-fn (:db env) query)))))
+(def-operation! ::pull
+  :transform
+  (fn [{:keys [read-map] :as env} query]
+    (let [pull-type (pull-type env read-map)
+          pull-fn (get-in env [:db-fns pull-type])
+          result (get-result env)]
+      (when (and (some? pull-type) (nil? pull-fn))
+        (throw (ex-info (str "WARN: Cannot perform a pull on a query that"
+                             " was not of :scalar or :collection find-pattern type.")
+                        {:read-map  read-map
+                         :query     query
+                         :pull-type pull-type})))
+      (add-result env (cond->> result
+                               (and (some? result) (some? pull-fn))
+                               (pull-fn (:db env) query))))))
 
 ;; base+case
 
@@ -414,35 +449,37 @@
   [_ o1 o2]
   (merge-query o1 o2))
 
-(defmethod call-op :case
-  [{:keys [read-map target] :as env} _ cases]
-  (let [base (:base read-map)
-        match (find-case-match env cases)
-        read-map (if (nil? match)
-                   (cond-> {:no-op nil}
-                           (contains? base target)
-                           (assoc target (get base target)))
-                   (reduce-kv (fn [m k right]
-                                (if-some [[_ left] (find m k)]
-                                  (assoc m k (case-merge k left right))
-                                  (assoc m k right)))
-                              base
-                              match))]
-    ;; Changes the read-map to be the new merged map.
-    (assoc env :read-map read-map)))
+(def-operation! :case
+  :lajt.op.stage/special
+  :lajt.op.stage/dependents [:lajt.op.stage/setup]
+  (fn [{:keys [read-map target] :as env} cases]
+    (let [base (:base read-map)
+          match (find-case-match env cases)
+          read-map (if (nil? match)
+                     (cond-> {:no-op nil}
+                             (contains? base target)
+                             (assoc target (get base target)))
+                     (reduce-kv (fn [m k right]
+                                  (if-some [[_ left] (find m k)]
+                                    (assoc m k (case-merge k left right))
+                                    (assoc m k right)))
+                                base
+                                match))]
+      ;; Changes the read-map to be the new merged map.
+      (assoc env :read-map read-map))))
 
-(defmethod call-op :lastly
-  [env _ calls]
-  ;; :lastly sets the result to whatever the functions return.
-  ;; Functions are passed the result as argument.
-  (add-result env (call-fns calls env)))
+(def-operation! :lastly
+  :lajt.op.stage/special
+  :lajt.op.stage/depends-on [:lajt.op.stage/did-transform]
+  (fn [env calls]
+    (add-result env (call-fns calls env))))
 
-(defmethod call-op :custom
-  [env _ custom-fn]
-  ;; Functions are passed the result as argument.
-  (add-result env (custom-fn env)))
+(def-operation! :custom
+  :action
+  (fn [env custom-fn]
+    (add-result env (custom-fn env))))
 
-(defn call [env k v]
+#_(defn call [env k v]
   #?(:cljs
      (call-op env k v)
      :clj
@@ -467,7 +504,48 @@
                    :ex     (Throwable->map t)})))
          (throw t)))))
 
+;; ####################
+;; ## Operation order
+
+(defn- dependency-graph [stages ops]
+  (let [g (reduce (fn [g [first then]]
+                    (dep/depend g then first))
+                  (dep/graph)
+                  (->> stage-execution-order
+                       (filter (set stages))
+                       (partition 2 1)))]
+    (reduce
+      (fn [g {:lajt.op.stage/keys [depends-on dependents] :as m}]
+        (let [stage-id (:lajt.op.stage/id m)
+              op-id (:lajt.op/id m)
+              dep-key [op-id stage-id]
+              g (reduce #(dep/depend % dep-key %2) g depends-on)
+              g (reduce #(dep/depend % %2 dep-key) g dependents)]
+          (cond-> g
+                  (not (= :lajt.op.stage/special stage-id))
+                  (-> (dep/depend dep-key stage-id)
+                      (dep/depend (stage-after stage-id) dep-key)))))
+      g
+      (eduction
+        (mapcat (fn [{:lajt.op/keys [id stages]}]
+                  (eduction (map #(assoc % :lajt.op/id id)) stages)))
+        (filter #(contains? stages (:lajt.op.stage/id %)))
+        ops))))
+
+(defn operation-order
+  ([] (operation-order @operations))
+  ([ops]
+   (dep/topo-sort (dependency-graph execution-stages ops))))
+
 (comment
+  ;; What about remote?
+  ;; figure out how to call these operations.
+
+  (-> @operations)
+  (dep/graph)
+  (dep/topo-sort (dep/depend (dep/graph) "foo" {:bar 1}))
+  (operation-order)
+  (dep/topo-sort (dependency-graph @operations))
   (let [ret nil]
     (when-not (map? ret)
       (throw (ex-info (str "Call to op: " k
