@@ -29,13 +29,9 @@
 
 (s/def :lajt.op/exeuction-stages execution-stages)
 
-(s/def :lajt.op.stage/id #{:lajt.op.stage/setup
-                           :lajt.op.stage/action
-                           :lajt.op.stage/transform
-                           ;; Special type can depend on the op.types them selves.
-                           :lajt.op.stage/special
-                           ;; Remote type for returning remote data.
-                           :lajt.op.stage/remote})
+(s/def :lajt.op.stage/id (conj execution-stages
+                               ;; Remote type for returning remote data.
+                               :lajt.op.stage/remote))
 (s/def :lajt.op.stage/fn fn?)
 (s/def :lajt.op.stage/dependents (s/coll-of :lajt.op/id))
 (s/def :lajt.op.stage/depends-on (s/coll-of :lajt.op/id))
@@ -87,7 +83,7 @@
                   deps)))
          (s/conform ::->op-args args))})
 
-(defonce operations (atom #{}))
+(def operations (atom #{}))
 
 (defn def-operation! [op-key & args]
   (let [op (->op op-key
@@ -132,10 +128,9 @@
   (reduce-kv (fn [g op {:lajt.op.stage/keys [id depends-on dependents]}]
                (let [g (reduce #(dep/depend % op %2) g depends-on)
                      g (reduce #(dep/depend % %2 op) g dependents)]
-                 (cond-> g
-                         (not (= :lajt.op.stage/special id))
-                         (-> (dep/depend op id)
-                             (dep/depend (stage-after id) op)))))
+                 (-> g
+                     (dep/depend op id)
+                     (dep/depend (stage-after id) op))))
           dep-g
           stage-by-op)
   (def dep-g2 *1)
@@ -161,8 +156,11 @@
   [env]
   (get-scoped env ::results))
 
-(defn remove-pull [env]
-  (update env :read-map dissoc ::pull))
+(defn remove-pull-op [env]
+  (assoc env ::pull ::dont-pull))
+
+(defn should-pull? [env]
+  (not= (::pull env) ::dont-pull))
 
 ;; ############
 ;; Ops
@@ -191,15 +189,14 @@
                            :env        env})))))
 
 (def-operation! :before
-  :lajt.op.stage/special
-  :lajt.op.stage/depends-on [:lajt.op.stage/did-setup]
-  :lajt.op.stage/dependents [:lajt.op.stage/action]
+  :lajt.op.stage/did-setup
   (fn [env v]
     (call-fns v env)
     env))
 
 (def-operation! :params
   :setup
+  :depends-on [:depends-on]
   (fn [env params]
     (assoc env :params
                (when (some? params)
@@ -247,7 +244,7 @@
 (def-operation! :no-op
   :action
   (fn [env _]
-    (remove-pull env)))
+    (remove-pull-op env)))
 
 ;; TODO: Make it expand from :sort -> :sort/pre :sort/post :sort/remote
 ;; are expansions different from pre?
@@ -261,7 +258,9 @@
   :transform
   (fn [env {:keys [comparator key-fn order entities?]
             :or   {entities?  true
-                   comparator compare}}]
+                   comparator compare}
+            :as sort-opts}]
+    (prn "sort-opts: " sort-opts)
     (let [result (get-result env)
           comparator (if (= :decending order)
                        (fn [a b]
@@ -355,7 +354,8 @@
                     {:read-map read-map}))))
 
 (def-operation! ::pull
-  :transform
+  :lajt.op.stage/transform
+  :depends-on [:sort]
   (fn [{:keys [read-map] :as env} query]
     (let [pull-type (pull-type env read-map)
           pull-fn (get-in env [:db-fns pull-type])
@@ -450,7 +450,7 @@
   (merge-query o1 o2))
 
 (def-operation! :case
-  :lajt.op.stage/special
+  :lajt.op.stage/will-setup
   :lajt.op.stage/dependents [:lajt.op.stage/setup]
   (fn [{:keys [read-map target] :as env} cases]
     (let [base (:base read-map)
@@ -469,8 +469,7 @@
       (assoc env :read-map read-map))))
 
 (def-operation! :lastly
-  :lajt.op.stage/special
-  :lajt.op.stage/depends-on [:lajt.op.stage/did-transform]
+  :lajt.op.stage/did-transform
   (fn [env calls]
     (add-result env (call-fns calls env))))
 
@@ -478,6 +477,8 @@
   :action
   (fn [env custom-fn]
     (add-result env (custom-fn env))))
+
+(defn call [env k v])
 
 #_(defn call [env k v]
   #?(:cljs
@@ -507,6 +508,26 @@
 ;; ####################
 ;; ## Operation order
 
+(defn select-operations [filter-fn ops]
+  (eduction
+    (filter (comp filter-fn :lajt.op/id))
+    ops))
+
+(defn flatten-stages [stages ops]
+  (eduction
+    (mapcat (fn [{:lajt.op/keys [id stages]}]
+              (eduction (map #(assoc % :lajt.op/id id)) stages)))
+    (filter #(stages (:lajt.op.stage/id %)))
+    ops))
+
+(defn get-stage-fn [ops]
+  (let [by-ids (->> (flatten-stages (constantly true) ops)
+                    (group-by (juxt :lajt.op/id :lajt.op.stage/id)))]
+    (fn [op-id stage-id]
+      (when-let [stages (get by-ids [op-id stage-id])]
+        (assert (== 1 (count stages)))
+        (first stages)))))
+
 (defn- dependency-graph [stages ops]
   (let [g (reduce (fn [g [first then]]
                     (dep/depend g then first))
@@ -519,18 +540,15 @@
         (let [stage-id (:lajt.op.stage/id m)
               op-id (:lajt.op/id m)
               dep-key [op-id stage-id]
-              g (reduce #(dep/depend % dep-key %2) g depends-on)
-              g (reduce #(dep/depend % %2 dep-key) g dependents)]
-          (cond-> g
-                  (not (= :lajt.op.stage/special stage-id))
-                  (-> (dep/depend dep-key stage-id)
-                      (dep/depend (stage-after stage-id) dep-key)))))
+              after (stage-after stage-id)
+              g (reduce #(dep/depend % dep-key [%2 stage-id]) g depends-on)
+              g (reduce #(dep/depend % [%2 stage-id] dep-key) g dependents)]
+          (-> g
+              (dep/depend dep-key stage-id)
+              (cond-> (some? after)
+                      (dep/depend after dep-key)))))
       g
-      (eduction
-        (mapcat (fn [{:lajt.op/keys [id stages]}]
-                  (eduction (map #(assoc % :lajt.op/id id)) stages)))
-        (filter #(contains? stages (:lajt.op.stage/id %)))
-        ops))))
+      (flatten-stages stages ops))))
 
 (defn operation-order
   ([] (operation-order @operations))
@@ -540,6 +558,11 @@
 (comment
   ;; What about remote?
   ;; figure out how to call these operations.
+
+  (operation-order
+    (select-operations
+      #{:lastly}
+      @operations))
 
   (-> @operations)
   (dep/graph)

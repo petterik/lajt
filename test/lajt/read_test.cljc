@@ -378,7 +378,8 @@
 
   (do
     (def ^:dynamic *db* (->db))
-    (def ^:dynamic *parser* (debug-parser (parser-test/->parser)))
+    (def ^:dynamic *parser* (debug-parser (parser-test/->parser
+                                            parser/parser)))
 
     )
   (clojure.spec.test.alpha/unstrument)
