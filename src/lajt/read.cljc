@@ -104,6 +104,7 @@
 
 (defn ops-to-run [env]
   (ops/operation-order
+    (::stage-context env)
     (ops/select-operations
       (set (keys (:read-map env)))
       (:operations env))))
@@ -116,6 +117,7 @@
                         (take-while (complement #{:lajt.op.stage/did-action})))
                       (::ops-to-run env))]
     (when-not (== 1 (count actions))
+      (prn "ACTIONS: " actions)
       (action-error env actions))
     env))
 
@@ -145,7 +147,37 @@
                              (complement
                                #{:lajt.op.stage/did-action}))
                            (drop 1)
-                           (ops-to-run env))}))))})
+                           (ops-to-run env))}))))
+   :lajt.op.stage/remote
+   (fn [{:keys             [target]
+         ;; Using some internals
+         :lajt.parser/keys [expr expr-spec]
+         :as               env}]
+     (let [read-map (:read-map env)
+           ret (get read-map target)
+           ;; Value of :remote can be a function or a vector of functions:
+           ret (cond-> ret
+                       (not (or (boolean? ret) (nil? ret)))
+                       (ops/call-fns env))
+           ;; Wrap it in a sequential collection if it isn't already.
+           ;; We're able to return multiple remote queries.
+           ret (cond-> ret
+                       (not (sequential? ret))
+                       vector)
+           ;; If the value is true, unform the expression to its original form.
+           ;; Remove falsey values.
+           ret (into []
+                     (comp (filter boolean)
+                           (map #(if (true? %) (s/unform expr-spec expr) %)))
+                     ret)]
+       (ops/add-result env ret)))
+   :lajt.op.stage/did-remote
+   (fn [{:lajt.parser/keys [merge-queries]
+         :as               env}]
+     (ops/add-result env
+                     (merge-queries
+                       (ops/get-result env)
+                       (ops/get-remote-query env))))})
 
 (defn- perform-operation [env op]
   ;; It's a stage keyword.
@@ -312,10 +344,11 @@
                            :db-fns db-fns
                            :read-ops (:read-ops env default-ops)
                            :operations operations
-                           ::get-stage (ops/get-stage-fn operations))]
+                           ::get-stage (ops/get-stage-fn operations)
+                           ::stage-context (if (some? (:target env))
+                                             (:remote ops/stage-contexts)
+                                             (:local ops/stage-contexts)))]
         (validate-read! env)
-        (if (some? (:target env))
-          (perform-remote env)
-          (ops/get-result
-            (perform-read2
-              (assoc env ::ops-to-run (ops-to-run env)))))))))
+        (ops/get-result
+          (perform-read2
+            (assoc env ::ops-to-run (ops-to-run env))))))))

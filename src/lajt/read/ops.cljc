@@ -4,6 +4,7 @@
         [clojure.data])
     [medley.core :as m]
     [clojure.spec.alpha :as s]
+    [clojure.set :as set]
     [clojure.string :as string]
     [clojure.spec.gen.alpha :as gen]
     [com.stuartsierra.dependency :as dep]))
@@ -19,19 +20,20 @@
    :lajt.op.stage/transform
    :lajt.op.stage/did-transform])
 
-(def execution-stages (set stage-execution-order))
+(def remote-stage-execution-order
+  [:lajt.op.stage/will-setup
+   :lajt.op.stage/setup
+   :lajt.op.stage/did-setup
+   :lajt.op.stage/remote
+   :lajt.op.stage/did-remote])
 
-(def stage-after
-  (into {} (map vec (partition 2 1 stage-execution-order))))
-
-(def stage-before
-  (into {} (map (comp vec reverse)) stage-after))
+(def execution-stages (set/union
+                        (set stage-execution-order)
+                        (set remote-stage-execution-order)))
 
 (s/def :lajt.op/exeuction-stages execution-stages)
 
-(s/def :lajt.op.stage/id (conj execution-stages
-                               ;; Remote type for returning remote data.
-                               :lajt.op.stage/remote))
+(s/def :lajt.op.stage/id execution-stages)
 (s/def :lajt.op.stage/fn fn?)
 (s/def :lajt.op.stage/dependents (s/coll-of :lajt.op/id))
 (s/def :lajt.op.stage/depends-on (s/coll-of :lajt.op/id))
@@ -81,6 +83,7 @@
                   {:lajt.op.stage/id id
                    :lajt.op.stage/fn (:fn stage)}
                   deps)))
+
          (s/conform ::->op-args args))})
 
 (def operations (atom #{}))
@@ -138,14 +141,20 @@
 
   )
 
+(defn get-scoped [env k]
+  (get-in env [k (:read-key env)]))
+
 (defn assoc-scoped [env k v]
   (assoc-in env [k (:read-key env)] v))
 
 (defn update-scoped [env k & args]
   (apply update-in env [k (:read-key env)] args))
 
-(defn get-scoped [env k]
-  (get-in env [k (:read-key env)]))
+(defn add-remote-query [env query]
+  (update-scoped env ::queries (fnil into []) query))
+
+(defn get-remote-query [env]
+  (get-scoped env ::queries))
 
 (defn add-result
   "Adds a result to env. Convenicence function for actions."
@@ -169,13 +178,13 @@
   :setup
   (fn [env v]
     (let [query (if (fn? v) (v env) v)
-          res ((:parser env) env query (:target env))
-          env (if (some? (:target env))
-                (update env ::results (fnil into []) res)
-                (update env ::results merge res))]
-      ;; Assoc the :depends-on key with all results
-      ;; such reads can access it easily.
-      (assoc env :depends-on (::results env)))))
+          res ((:parser env) env query (:target env))]
+      (if (some? (:target env))
+        (add-remote-query env res)
+        (let [env (update env ::results merge res)]
+          ;; Assoc the :depends-on key with all results
+          ;; such reads can access it easily.
+          (assoc env :depends-on (::results env)))))))
 
 (defn call-fns
   "Calls a single function or a vector of functions with the env."
@@ -253,8 +262,9 @@
   :remote
   (fn [env {:keys [key-fn entities?]
             :or   {entities?  true}}]
-    (when (and entities? (keyword? key-fn))
-      [{(:read-key env) [key-fn]}]))
+    (cond-> env
+            (and entities? (keyword? key-fn))
+            (add-remote-query [{(:read-key env) [key-fn]}])))
   :transform
   (fn [env {:keys [comparator key-fn order entities?]
             :or   {entities?  true
@@ -528,11 +538,22 @@
         (assert (== 1 (count stages)))
         (first stages)))))
 
-(defn- dependency-graph [stages ops]
+(defn create-stage-context [execution-order]
+  (let [after (into {} (map vec (partition 2 1 execution-order)))]
+    {:execution-order execution-order
+     :stages          (set execution-order)
+     :stage-after     after
+     :stage-before    (into {} (map (comp vec reverse)) after)}))
+
+(def stage-contexts
+  {:local (create-stage-context stage-execution-order)
+   :remote (create-stage-context remote-stage-execution-order)})
+
+(defn- dependency-graph [{:keys [execution-order stages stage-after]} ops]
   (let [g (reduce (fn [g [first then]]
                     (dep/depend g then first))
                   (dep/graph)
-                  (->> stage-execution-order
+                  (->> execution-order
                        (filter (set stages))
                        (partition 2 1)))]
     (reduce
@@ -552,8 +573,9 @@
 
 (defn operation-order
   ([] (operation-order @operations))
-  ([ops]
-   (dep/topo-sort (dependency-graph execution-stages ops))))
+  ([ops] (operation-order (:local stage-contexts) ops))
+  ([stage-context ops]
+   (dep/topo-sort (dependency-graph stage-context ops))))
 
 (comment
   ;; What about remote?

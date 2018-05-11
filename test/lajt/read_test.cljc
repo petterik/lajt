@@ -331,14 +331,14 @@
                    [:read])))
 
   (testing "includes :depends-on"
-    (is (= [:common-read :read1 :read2]
-          (*parser* {:target :remote
-                     :reads  {:common-read {:remote true}
-                              :read1       {:remote     true
-                                            :depends-on [:common-read]}
-                              :read2       {:remote     true
-                                            :depends-on [:common-read]}}}
-                    [:read1 :read2])))
+    (is (= (set [:common-read :read1 :read2])
+           (set (*parser* {:target :remote
+                           :reads  {:common-read {:remote true}
+                                    :read1       {:remote     true
+                                                  :depends-on [:common-read]}
+                                    :read2       {:remote     true
+                                                  :depends-on [:common-read]}}}
+                          [:read1 :read2]))))
 
     (is (= [{:dep [:read-key]}]
            (*parser* {:target :remote
