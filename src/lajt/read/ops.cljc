@@ -99,48 +99,6 @@
 ;; ############
 ;; Impl stuff
 
-
-(comment
-  (s/conform ::->op-args op-args)
-  (->op :foo op-args)
-  (let [setupf (fn [env value])
-        transformf (fn [env value])]
-    (= (->op [:op.stage/setup
-              setupf
-              :op.stage/transform
-              :op/dependents [:some-other-op]
-              transformf])
-      {}))
-  (deref operations)
-  (require '[com.stuartsierra.dependency :as dep])
-  (def g (dep/graph))
-  (defn dependency-graph []
-    (reduce (fn [g [first then]]
-              (dep/depend g then first))
-            (dep/graph)
-            (partition 2 1 stage-execution-order)))
-  (def dep-g (dependency-graph))
-  (= stage-execution-order (dep/topo-sort dep-g))
-
-  (def stage-by-op
-    (into {}
-          (mapcat (fn [{:lajt.op/keys [id stages]}]
-                      (map vector (repeat id) stages)))
-          @operations))
-
-  (reduce-kv (fn [g op {:lajt.op.stage/keys [id depends-on dependents]}]
-               (let [g (reduce #(dep/depend % op %2) g depends-on)
-                     g (reduce #(dep/depend % %2 op) g dependents)]
-                 (-> g
-                     (dep/depend op id)
-                     (dep/depend (stage-after id) op))))
-          dep-g
-          stage-by-op)
-  (def dep-g2 *1)
-  (dep/topo-sort dep-g2)
-
-  )
-
 (defn get-scoped [env k]
   (get-in env [k (:read-key env)]))
 
@@ -268,9 +226,7 @@
   :transform
   (fn [env {:keys [comparator key-fn order entities?]
             :or   {entities?  true
-                   comparator compare}
-            :as sort-opts}]
-    (prn "sort-opts: " sort-opts)
+                   comparator compare}}]
     (let [result (get-result env)
           comparator (if (= :decending order)
                        (fn [a b]
@@ -288,11 +244,7 @@
                 (if (some? !key-fn)
                   (sort-by !key-fn comparator result)
                   (sort comparator result)))]
-      (-> (add-result env ret)
-          (cond-> (and entities? (keyword? key-fn))
-                  (assoc-scoped ::sort
-                                {:remote-query
-                                 [{(:read-key env) [key-fn]}]}))))))
+      (add-result env ret))))
 
 ;; ###############
 ;; Pull implementation
@@ -488,35 +440,19 @@
   (fn [env custom-fn]
     (add-result env (custom-fn env))))
 
-(defn call [env k v])
-
-#_(defn call [env k v]
-  #?(:cljs
-     (call-op env k v)
-     :clj
-     (try
-       (when *debug*
-         (locking *out*
-           (prn "Entering op: " k " for k: " (:read-key env))))
-       (let [ret (call-op env k v)]
-         (when *debug*
-           (let [[before after] (clojure.data/diff env ret)]
-             (locking *out*
-               (prn {:op     k
-                     :before before
-                     :after  after}))))
-         ret)
-       (catch Throwable t
-         (when *debug*
-           (locking *out*
-             (prn {:op     k
-                   :before (select-keys env [:read-map :read-key :query])
-                   :after  :exception
-                   :ex     (Throwable->map t)})))
-         (throw t)))))
-
 ;; ####################
 ;; ## Operation order
+
+(defn create-stage-context [execution-order]
+  (let [after (into {} (map vec (partition 2 1 execution-order)))]
+    {:execution-order execution-order
+     :stages          (set execution-order)
+     :stage-after     after
+     :stage-before    (into {} (map (comp vec reverse)) after)}))
+
+(def stage-contexts
+  {:local (create-stage-context stage-execution-order)
+   :remote (create-stage-context remote-stage-execution-order)})
 
 (defn select-operations [filter-fn ops]
   (eduction
@@ -537,17 +473,6 @@
       (when-let [stages (get by-ids [op-id stage-id])]
         (assert (== 1 (count stages)))
         (first stages)))))
-
-(defn create-stage-context [execution-order]
-  (let [after (into {} (map vec (partition 2 1 execution-order)))]
-    {:execution-order execution-order
-     :stages          (set execution-order)
-     :stage-after     after
-     :stage-before    (into {} (map (comp vec reverse)) after)}))
-
-(def stage-contexts
-  {:local (create-stage-context stage-execution-order)
-   :remote (create-stage-context remote-stage-execution-order)})
 
 (defn- dependency-graph [{:keys [execution-order stages stage-after]} ops]
   (let [g (reduce (fn [g [first then]]
@@ -571,116 +496,5 @@
       g
       (flatten-stages stages ops))))
 
-(defn operation-order
-  ([] (operation-order @operations))
-  ([ops] (operation-order (:local stage-contexts) ops))
-  ([stage-context ops]
-   (dep/topo-sort (dependency-graph stage-context ops))))
-
-(comment
-  ;; What about remote?
-  ;; figure out how to call these operations.
-
-  (operation-order
-    (select-operations
-      #{:lastly}
-      @operations))
-
-  (-> @operations)
-  (dep/graph)
-  (dep/topo-sort (dep/depend (dep/graph) "foo" {:bar 1}))
-  (operation-order)
-  (dep/topo-sort (dependency-graph @operations))
-  (let [ret nil]
-    (when-not (map? ret)
-      (throw (ex-info (str "Call to op: " k
-                           " did not return a map."
-                           " Must return a new environment")
-                      {:op k :val v})))
-    ret)
-
-
-  {:sort
-   {:pre (fn [])
-    :post (fn [])
-    :post-deps [:action]
-    :remote (fn [])
-    :remote-deps [:pre]}}
-
-  {:deps {:pre nil
-          :post [:target]
-          :remote [:pre]
-          :action [:pre]}}
-
-  ;; Options:
-  ;; 1. Define everything as multimethods
-  ;; - these multimethods would have well defined semantics.
-  ;; - pre-op are called first
-  ;; - actions are called after all pre-ops.
-  ;; - post-ops are called after actions or remote data
-  ;; How there's also a dependency multimethod where one can specify ones dependencies?
-  ;; so sort would be this mess:
-  (defmethod pre-op :sort [_] :IMPLEMENTATION)
-  (defmethod post-op :sort [_] :IMPLEMENTATION)
-  (defmethod remote-op :sort [_] :IMPLEMENTATION)
-  (defmethod dependencies :sort [_] :IMPLEMENTATION)
-
-
-
-  (defprotocol IPreOp
-    (pre [this env v]))
-  (defprotocol IPostOp
-    (pre [this env v]))
-  (defprotocol IDependOnOps
-    (pre [this env v]))
-  (defprotocol IAction
-    (pre [this env v]))
-  (defprotocol IRemote
-    ())
-
-  ;; :sort
-  (reify
-    IPreOp
-    (pre [this env v])
-    IPostOp
-    ()
-    ;; got tired of typing...
-    )
-
-  ;; Or we could just write a macro around the multimethods
-  (let [k->op {:pre pre-op
-               :post post-op
-               ;; ...
-               }]
-    (defmacro defop [op-id args & body]
-     `(do
-        ~@(map (fn [[k v]]
-                 `(defmethod ~(get k->op k) ~op-id
-                    ~args
-                    ~v))
-               (partition 2 body)))))
-
-  ;; get it to work with multimethods.
-  ;; write macro with specs for arguments.
-  ;; done.
-
-  ;; Or, we could just flatten everything out.
-  ;; :sort is an expanding op that expands to
-  ;; :sort/pre
-  ;; :sort/post
-  ;; :sort/remote
-
-  ;; Everytime an expansion happens, the dependencies are re-calculated.
-  ;; Should there be an expanding-op thing?
-  ;; Or just ops as per ush
-
-  ;; This should be a thing
-  (defmulti op-dependency (fn [k] k) :default ::default)
-  (defmethod op-dependency :sort
-    []
-    {:op-type :op-type/expansion
-     ::depends-on [:case]})
-  :op-types #{:op-type/expansion :op-type/pre :op-type/action
-               :op-type/remote :op-type/post}
-
-  )
+(defn operation-order [stage-context ops]
+  (dep/topo-sort (dependency-graph stage-context ops)))
