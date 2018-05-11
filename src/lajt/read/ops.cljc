@@ -444,11 +444,11 @@
 ;; ## Operation order
 
 (defn create-stage-context [execution-order]
-  (let [after (into {} (map vec (partition 2 1 execution-order)))]
+  (let [stage-after (into {} (map vec) (partition 2 1 execution-order))]
     {:execution-order execution-order
      :stages          (set execution-order)
-     :stage-after     after
-     :stage-before    (into {} (map (comp vec reverse)) after)}))
+     :stage-after     stage-after
+     :stage-before    (into {} (map (comp vec reverse)) stage-after)}))
 
 (def stage-contexts
   {:local (create-stage-context stage-execution-order)

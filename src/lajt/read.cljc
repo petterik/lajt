@@ -132,7 +132,7 @@
           ret (stage-op env ret)]
       ret)))
 
-(defn perform-read2 [env]
+(defn perform-operations [env]
   (let [ret (reduce perform-operation env (::ops-to-run env))]
     (if-let [new-env (::new-env ret)]
       (recur (assoc new-env ::ops-to-run
@@ -187,5 +187,5 @@
                                              (:local ops/stage-contexts)))]
         (validate-read! env)
         (ops/get-result
-          (perform-read2
+          (perform-operations
             (assoc env ::ops-to-run (ops-to-run env))))))))
