@@ -120,7 +120,9 @@
                                   :where [[?e :person/first-name]]}
                         :sort   {:key-fn :person/last-name}
                         :remote true}}]
-      (is (= [{:read [:person/last-name]}]
+      ;; Gets :person/first-name too because it's in the query
+      ;; and we've now added this feature.
+      (is (= [{:read [:person/first-name :person/last-name]}]
              (*parser* {:reads reads
                         :target :remote}
                        [:read])))
@@ -224,7 +226,7 @@
   (testing "cannot have both lookup ref and query"
     (is (thrown-with-msg?
           #?(:clj Exception :cljs js/Error)
-          #"lookup.*query"
+          #"multiple.*actions"
           (*parser*
             {:db    *db*
              :reads {:crash/lookup+query
@@ -374,6 +376,50 @@
              (*parser* {:target :remote
                         :reads  {:read1 {:remote (fn [env] [:read2 true])}}}
                        [:read1]))))))
+
+(deftest query-returns-pull-pattern-for-remote-targets
+  (are [find-pattern pull-pattern]
+       (= pull-pattern
+          (*parser* {:target :remote
+                     :reads  {:read1
+                              {:remote true
+                               :query  {:find  find-pattern
+                                        :where '[[?e :person/foo ?foo]
+                                                 [?e :person/q]
+                                                 [?bar :bar/people ?e]
+                                                 [?foo :foo/foos]
+                                                 [?bar :bar/xyz ?xyz]
+                                                 [?xyz :xyz/abc ?abc]]}}}}
+                    [{:read1 [:person/first-name]}]))
+    '[[?e ...]]
+    [{:read1 [:person/first-name
+              {:person/foo [:foo/foos]}
+              :person/q
+              {:bar/_people [{:bar/xyz [:xyz/abc]}]}]}]
+
+    '[?e .]
+    [{:read1 [:person/first-name
+              {:person/foo [:foo/foos]}
+              :person/q
+              {:bar/_people [{:bar/xyz [:xyz/abc]}]}]}]
+
+    ;; relations doesn't get anything more than they asked for.
+    ;; Maybe we should not allow relations or tuples?
+    '[?e ?foo]
+    [{:read1 [:person/first-name]}])
+
+  (testing "functions are skipped, when creating pull pattern."
+    (is (= [{:read1 [:person/first-name
+                     :person/foo]}]
+           (*parser* {:target :remote
+                      :reads {:read1
+                              {:remote true
+                               :query '{:find [?e .]
+                                        :where [[?e :person/first-name]
+                                                [(some-fn ?e) ?b]
+                                                [?e :person/foo]]}}}}
+                     [:read1])))))
+
 (comment
 
   (do

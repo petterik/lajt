@@ -179,7 +179,63 @@
                        ":params need to be a map or a function."
                        {:params params})))))))
 
+(defn- reverse-lookup-keyword [attr]
+  (keyword
+    (namespace attr)
+    (str "_" (name attr))))
+
+(defn make-pattern [from-sym references]
+  (let [remove-visited
+        (remove (fn [[_ logic-var]]
+                  (and (some? logic-var)
+                       (contains? (::visited references) logic-var))))]
+    (into
+      []
+      (comp
+        remove-visited
+        (mapcat (fn [[attr logic-var]]
+                  (if (and (some? logic-var)
+                           (->> (get references logic-var)
+                                (sequence remove-visited)
+                                (some seq)))
+                    [{attr
+                      (make-pattern logic-var
+                                    (update references
+                                            ::visited
+                                            (fnil conj #{})
+                                            from-sym))}]
+                    [attr]))))
+      (get references from-sym))))
+
+(defn- query->pull-pattern [query]
+  (let [conformed-find (s/conform ::find-pattern (:find query))
+        find-sym (condp = (first conformed-find)
+                   :scalar (-> (second conformed-find) :find-element second)
+                   :collection (-> (second conformed-find)
+                                   first :find-element second)
+                   nil)]
+    (when (some? find-sym)
+      (let [references
+            (transduce
+              (comp
+                (filter (fn [[e]] (s/valid? ::logic-var e)))
+                (filter (fn [[_ a]] (s/valid? keyword? a))))
+              (completing
+                (fn [m [e a v]]
+                  (-> (update m e (fnil conj []) [a v])
+                      (cond-> (s/valid? ::logic-var v)
+                              (update v (fnil conj [])
+                                      [(reverse-lookup-keyword a) e])))))
+              {}
+              (:where query))]
+        (make-pattern find-sym references)))))
+
 (def-operation! :query
+  :remote
+  (fn [env query]
+    (if-let [pp (not-empty (query->pull-pattern query))]
+      (add-remote-query env [{(:read-key env) pp}])
+      env))
   :action
   (fn [env query]
     (let [q-params (:params env)
@@ -272,7 +328,7 @@
                                                         ::find-element
                                                         :dots
                                                         '#{...}))))
-(s/conform ::find-pattern '[(count ?e) .])
+(s/conform ::find-pattern '[[?e ...]])
 
 (defn- pull-fn-by-action-result [env]
   (let [res (get-result env)]
