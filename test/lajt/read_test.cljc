@@ -418,6 +418,17 @@
                                         :where [[?e :person/first-name]
                                                 [(some-fn ?e) ?b]
                                                 [?e :person/foo]]}}}}
+                     [:read1]))))
+
+  (testing ":depends-on gets its :query turned into a pull pattern."
+    (is (= [{:read2 [:person/first-name]}]
+           (*parser* {:target :remote
+                      :reads  {:read1
+                               {:no-op      {}
+                                :depends-on [:read2]}
+                               :read2
+                               {:query '{:find [?e .]
+                                         :where [[?e :person/first-name]]}}}}
                      [:read1])))))
 
 (comment
