@@ -431,6 +431,28 @@
                                          :where [[?e :person/first-name]]}}}}
                      [:read1])))))
 
+(deftest lookup-ref-keyword-gets-added-to-pull-pattern
+  (testing "Gets added when there's already a pull pattern"
+    (is (= [{:lookup [:a :unique-key]}]
+          (*parser* {:target :remote
+                     :reads  {:lookup
+                              {:remote     true
+                               :lookup-ref [:unique-key :unique-value]}}}
+                    [{:lookup [:a]}]))))
+  ;; TODO: Figure out if this is a good idea
+  (testing "does not get added when there's no pull pattern"
+    (is (= [:lookup]
+           (*parser* {:target :remote
+                      :reads  {:lookup
+                               {:remote     true
+                                :lookup-ref [:unique-key :unique-value]}}}
+                     [:lookup]))))
+  (testing "does not get added when :remote is false"
+    (is (= []
+           (*parser* {:target :remote
+                      :reads {:lookup {:lookup-ref [:k :v]}}}
+                     [{:lookup [:a]}])))))
+
 (comment
 
   (do

@@ -38,18 +38,15 @@
                    (mutate env k p))}))))
 
 (defn setup [test-fn]
-  (let [parser-fns [parser/parser parser/eager-parser]
-        om-next-parser-fns
-        (map (fn [parser-fn]
-               (fn [config]
-                 (parser-fn
-                   (-> config
-                       (update :read-plugins (fnil conj []) parser/unwrap-om-next-read-plugin)
-                       (update :mutate-plugins (fnil conj []) parser/unwrap-om-next-mutate-plugin)
-                       (update :read read/om-next-value-wrapper)
-                       (update :mutate om-next-mutate-wrapper)))))
-             parser-fns)]
-    (doseq [parser-fn (concat parser-fns om-next-parser-fns)]
+  (let [om-next-parser (fn [config]
+                            (parser/parser
+                              (-> config
+                                  (update :read-plugins (fnil conj []) parser/unwrap-om-next-read-plugin)
+                                  (update :mutate-plugins (fnil conj []) parser/unwrap-om-next-mutate-plugin)
+                                  (update :read read/om-next-value-wrapper)
+                                  (update :mutate om-next-mutate-wrapper))))
+        parser-fns [parser/parser parser/eager-parser om-next-parser]]
+    (doseq [parser-fn parser-fns]
       (binding [*parser* (->parser parser-fn)
                 s/*compile-asserts* true]
         (test-fn)))))

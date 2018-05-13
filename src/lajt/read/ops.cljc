@@ -111,6 +111,9 @@
 (defn add-remote-query [env query]
   (update-scoped env ::queries (fnil into []) query))
 
+(defn add-pull-pattern [env pull-pattern]
+  (add-remote-query env [{(:read-key env) pull-pattern}]))
+
 (defn get-remote-query [env]
   (get-scoped env ::queries))
 
@@ -234,7 +237,7 @@
   :remote
   (fn [env query]
     (if-let [pp (not-empty (query->pull-pattern query))]
-      (add-remote-query env [{(:read-key env) pp}])
+      (add-pull-pattern env pp)
       env))
   :action
   (fn [env query]
@@ -260,6 +263,12 @@
           (add-result env res))))))
 
 (def-operation! :lookup-ref
+  :remote
+  (fn [env ref]
+    (cond-> env
+            (and (get-in env [:read-map (:target env)])
+                 (some? (:query env)))
+            (add-pull-pattern [(first ref)])))
   :action
   (fn [env ref]
     (add-result env ((get-in env [:db-fns :entid]) (:db env) ref))))
