@@ -539,10 +539,11 @@
         (assert (== 1 (count stages)))
         (first stages)))))
 
-(defn- dependency-graph [{:keys [execution-order stages stage-after]} ops]
+(defn- dependency-graph
+  [graph {:keys [execution-order stages stage-after]} ops]
   (let [g (reduce (fn [g [first then]]
                     (dep/depend g then first))
-                  (dep/graph)
+                  graph
                   (->> execution-order
                        (filter (set stages))
                        (partition 2 1)))]
@@ -561,5 +562,17 @@
       g
       (flatten-stages stages ops))))
 
-(defn operation-order [stage-context ops]
-  (dep/topo-sort (dependency-graph stage-context ops)))
+(defn operation-order [graph stage-context ops]
+  (dep/topo-sort (dependency-graph graph stage-context ops)))
+
+(s/def ::op-stage (s/tuple :lajt.op/id :lajt.op.stage/id))
+
+(s/def ::op-dependency-map
+  (s/nilable
+    (s/map-of ::op-stage (s/coll-of ::op-stage))))
+
+(defn initial-graph [dependency-map]
+  (reduce-kv (fn [g dependent dependencies]
+               (reduce #(dep/depend % dependent %2) g dependencies))
+             (dep/graph)
+             (s/assert ::op-dependency-map dependency-map)))

@@ -119,16 +119,20 @@
     (let [reads {:read {:query  '{:find  [[?e ...]]
                                   :where [[?e :person/first-name]]}
                         :sort   {:key-fn :person/last-name}
-                        :remote true}}]
+                        :remote true}}
+          op-deps {[:sort :lajt.op.stage/remote]
+                   [[:query :lajt.op.stage/remote]]}]
       ;; Gets :person/first-name too because it's in the query
       ;; and we've now added this feature.
       (is (= [{:read [:person/first-name :person/last-name]}]
-             (*parser* {:reads reads
-                        :target :remote}
+             (*parser* {:reads                   reads
+                        :target                  :remote
+                        ::read/op-dependency-map op-deps}
                        [:read])))
       (is (= [{:read [:person/first-name :person/last-name]}]
-             (*parser* {:reads reads
-                        :target :remote}
+             (*parser* {:reads                   reads
+                        :target                  :remote
+                        ::read/op-dependency-map op-deps}
                        [{:read [:person/first-name]}]))))))
 
 (deftest reads-depending-on-other-reads

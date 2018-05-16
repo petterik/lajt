@@ -38,6 +38,7 @@
 
 (defn ops-to-run [env]
   (ops/operation-order
+    (ops/initial-graph (::op-dependency-map env))
     (::stage-context env)
     (ops/select-operations
       (set (keys (:read-map env)))
