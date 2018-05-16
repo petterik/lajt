@@ -2,8 +2,7 @@
   (:require
     [clojure.spec.alpha :as s]
     [clojure.spec.gen.alpha :as gen]
-    [medley.core :as m]
-    [clojure.test.check :as tc]))
+    [medley.core :as m]))
 
 (defn ?spec-throw [spec x]
   (when-not (s/valid? spec x)
