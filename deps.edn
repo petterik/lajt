@@ -3,7 +3,7 @@
  :deps
  {org.clojure/clojure         {:mvn/version "1.10.0-alpha4" :scope "provided"}
   org.clojure/clojurescript   {:mvn/version "1.10.217" :scope "provided"}
-  datascript                  {:mvn/version "0.16.4" :scope "provided"}
+  datascript                  {:mvn/version "0.16.5" :scope "provided"}
   com.stuartsierra/dependency {:mvn/version "0.2.0"}
   medley                      {:mvn/version "1.0.0"}}
  :aliases
@@ -30,8 +30,8 @@
                 :sha     "bb2c5a2c78aca9328e023b029c06ba0efdd1e3b7"}}
    :main-opts ["-m" "mach.pack.alpha.jcl"
                "deps.edn"
-               "target/lajt-0.1.0-SNAPSHOT-standalone.jar"
-               "--application-id" "petterik/lajt"
-               "--application-version" "0.1.0-SNAPSHOT"
+               "target/lajt-0.1.1-SNAPSHOT-standalone.jar"
+               "--application-id" "org.clojars.petterik/lajt"
+               "--application-version" "0.1.1-SNAPSHOT"
                ]}}}
 
