@@ -29,14 +29,18 @@
                       :union ::union
                       :param-expr ::param-expr))
 
+(s/def ::read-id ::id)
+(s/def ::mutation-id symbol?)
+
 (s/def ::mutation-expr
-  (s/cat :id symbol?
+  (s/cat :id ::mutation-id
          :params (s/? map?)))
 
 (s/def ::query-expr (s/or :read ::read-expr
                           :mutate ::mutation-expr))
 
 (s/def ::query (s/nilable (s/coll-of ::query-expr :kind vector? :gen-max 3)))
+
 
 ;; Lazy version of the spec used for parsing/editing/merging.
 ;; Why:
