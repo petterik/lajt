@@ -322,7 +322,11 @@
   (is (nil? (read-query {:no-op true} {:pull [:something]})))
   (is (= [:read] (*parser* {:reads {:read {:remote true :no-op true}}}
                          [:read]
-                         :remote))))
+                         :remote)))
+  (is (= '[(:read {:foo 1})]
+         (*parser* {:reads {:read {:remote true :no-op true}}}
+                   '[(:read {:foo 1})]
+                   :remote))))
 
 (deftest pre-ops-for-target
   (doseq [remote [true #(-> % :params :remote?) [:params :remote?]]]

@@ -133,18 +133,14 @@
   )
 
 (defn lazy-query-parser-plugin
-  ([env]
-   (map (partial parse (assoc env ::expr-specs {:read   ::l-read-expr
-                                                :mutate ::mutation-expr}))))
   ([env query]
    (?spec-throw ::l-query query)
    (into []
-         (lazy-query-parser-plugin env)
+         (map (partial parse (assoc env ::expr-specs {:read   ::l-read-expr
+                                                      :mutate ::mutation-expr})))
          (s/conform ::l-query query))))
 
 (defn query->parsed-query
-  ([]
-   (lazy-query-parser-plugin {}))
   ([query]
    (query->parsed-query {} query))
   ([env query]
@@ -252,7 +248,9 @@
     ;; Returning a pair that can be conjed into a {}.
     [k ret]
     ;; Handle reads with target
-    (let [true->query #(if (true? %) (s/unform expr-spec expr) %)]
+    (let [true->query #(cond-> (if (true? %) (s/unform expr-spec expr) %)
+                               (and (= :read (::type env)) p)
+                               (list p))]
       (when ret
         (cond
           (true? ret) [(true->query ret)]
