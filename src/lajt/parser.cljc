@@ -234,7 +234,7 @@
     [k ret]
     ;; Handle reads with target
     (let [true->query #(if (true? %) (s/unform expr-spec expr) %)]
-      (when (some? ret)
+      (when ret
         (cond
           (true? ret) [(true->query ret)]
           (sequential? ret) (into [] (map true->query) ret)

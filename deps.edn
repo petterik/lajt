@@ -2,7 +2,7 @@
  ["src"]
  :deps
  {org.clojure/clojure         {:mvn/version "1.10.0-alpha4" :scope "provided"}
-  org.clojure/clojurescript   {:mvn/version "1.10.217" :scope "provided"}
+  org.clojure/clojurescript   {:mvn/version "1.10.238" :scope "provided"}
   datascript                  {:mvn/version "0.16.5" :scope "provided"}
   com.stuartsierra/dependency {:mvn/version "0.2.0"}
   medley                      {:mvn/version "1.0.0"}}
