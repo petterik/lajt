@@ -78,6 +78,7 @@
    ::key       k
    ::params    (:params env)
    ::query     (:query env)
+   ::recursion (:recursion env)
    ::expr      expr
    ::expr-spec (get-in env [::expr-specs (::type env)])})
 
@@ -99,9 +100,15 @@
 (defmethod parse :join
   [env [_ m :as expr]]
   (let [[k [expr-type v]] (first m)]
-    (query-fragment (assoc env :query v)
-                    k
-                    expr)))
+    (condp = expr-type
+      :read-exprs
+      (query-fragment (assoc env :query v) k expr)
+      :recursion
+      (query-fragment (assoc env :recursion (s/unform ::recursion v))
+                      k
+                      expr))
+
+    ))
 
 (defmethod parse :union
   [env [_ m :as expr]]
@@ -120,6 +127,10 @@
 (defmethod parse :param-expr
   [env [_ {:keys [expr params]}]]
   (parse (assoc env :params params) expr))
+
+(defmethod parse :recursion
+  [env [_ expr]]
+  )
 
 (def lazy-query-parser-plugin
   (fn [env query]
@@ -275,10 +286,11 @@
   (let [call-fns {:read   (with-plugins-fn read ::read-plugins)
                   :mutate (with-plugins-fn mutate ::mutate-plugins)}]
     (fn [env query]
-      (let [xf (map (fn [{::keys [type expr expr-spec params key query]}]
+      (let [xf (map (fn [{::keys [type expr expr-spec
+                                  params key query recursion]}]
                       (let [env (assoc env ::expr expr
                                            ::expr-spec expr-spec
-                                           :query query
+                                           :query (or query recursion)
                                            ::type type
                                            ::params params)
                             ret ((get call-fns type) env key params)]
@@ -309,12 +321,20 @@
 
 (defn parsed-query->query
   ([]
-   (map (fn [{::keys [key query params]}]
-          (cond-> key
-                  (some? query)
-                  (hash-map query)
-                  (some? params)
-                  (list params)))))
+   (map (fn [{::keys [type key query params recursion]}]
+          (condp = type
+            :read
+            (cond-> key
+                    (some? query)
+                    (hash-map query)
+                    (some? recursion)
+                    (hash-map recursion)
+                    (some? params)
+                    (list params))
+            :mutate
+            (if (some? params)
+              (list key params)
+              (list key))))))
   ([parsed-query]
    (into [] (parsed-query->query) parsed-query)))
 

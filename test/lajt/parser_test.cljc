@@ -4,7 +4,10 @@
     [lajt.parser :as parser]
     [lajt.read :as read]
     [lajt.read.datascript]
-    [clojure.spec.alpha :as s]))
+    [clojure.spec.alpha :as s]
+    [clojure.spec.gen.alpha :as gen]
+    [clojure.test.check.properties :as prop :include-macros true]
+    [clojure.test.check.clojure-test :refer [defspec] :include-macros true]))
 
 (defn- read-mutate-handler [{:keys [query target]} k p]
   (if (some? target)
@@ -189,9 +192,25 @@
   ;; Created https://github.com/petterik/lajt/issues/2
   )
 
+(defspec parsed-query-roundtrip
+  50
+  (prop/for-all [query (gen/fmap vec (s/gen ::parser/query))]
+    (= query
+       (->> query
+            (parser/query->parsed-query)
+            (parser/parsed-query->query)))))
+
+(deftest query->parsed-query-roundtrips
+  (are [query] (= query (->> query
+                             (parser/query->parsed-query)
+                             (parser/parsed-query->query)))
+    '[{:A 0}]
+    '[(A)]))
 
 (comment
   (def ^:dynamic *parser* (->parser parser/parser))
 
+  (def query '[{:A 0}])
 
+  (def rountrip *1)
   )
