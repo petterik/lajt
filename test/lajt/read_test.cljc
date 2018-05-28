@@ -326,6 +326,11 @@
   (is (= '[(:read {:foo 1})]
          (*parser* {:reads {:read {:remote true :no-op true}}}
                    '[(:read {:foo 1})]
+                   :remote)))
+  (is (= '[:read :read]
+         (*parser* {:reads {:read {:remote true :no-op true}}
+                    :debug true}
+                   '[:read :read]
                    :remote))))
 
 (deftest pre-ops-for-target

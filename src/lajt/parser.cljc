@@ -304,7 +304,7 @@
                (not-empty))
           (->> query
                (into []
-                     (comp xf cat (distinct)))))))))
+                     (comp xf cat))))))))
 
 (def eager-query-parser-plugin
   (fn [env query]
