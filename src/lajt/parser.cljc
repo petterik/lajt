@@ -50,7 +50,8 @@
 ;; the spec for validation, but we need laziness sometimes for speed.
 
 ;; l short for lazy.
-(s/def ::l-query (s/coll-of ::l-query-expr :kind vector? :gen-max 3))
+(s/def ::l-query (s/nilable
+                   (s/coll-of ::l-query-expr :kind vector? :gen-max 3)))
 (s/def ::l-query-expr (s/or :read ::l-read-expr
                             :mutate ::mutation-expr))
 (s/def ::l-read-expr (s/or
