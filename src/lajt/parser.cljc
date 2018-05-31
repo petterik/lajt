@@ -146,7 +146,7 @@
 
 (defn query->parsed-query
   ([]
-    (query->parsed-query {}))
+    (lazy-query-parser-plugin {}))
   ([query]
    (query->parsed-query {} query))
   ([env query]
