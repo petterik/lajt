@@ -134,14 +134,19 @@
   )
 
 (defn lazy-query-parser-plugin
+  ([env]
+    (comp
+      (map (partial s/conform ::l-query-expr))
+      (map (partial parse (assoc env ::expr-specs
+                                     {:read   ::l-read-expr
+                                      :mutate ::mutation-expr})))))
   ([env query]
    (?spec-throw ::l-query query)
-   (into []
-         (map (partial parse (assoc env ::expr-specs {:read   ::l-read-expr
-                                                      :mutate ::mutation-expr})))
-         (s/conform ::l-query query))))
+   (into [] (lazy-query-parser-plugin env) query)))
 
 (defn query->parsed-query
+  ([]
+    (query->parsed-query {}))
   ([query]
    (query->parsed-query {} query))
   ([env query]

@@ -328,8 +328,7 @@
                    '[(:read {:foo 1})]
                    :remote)))
   (is (= '[:read :read]
-         (*parser* {:reads {:read {:remote true :no-op true}}
-                    :debug true}
+         (*parser* {:reads {:read {:remote true :no-op true}}}
                    '[:read :read]
                    :remote))))
 
