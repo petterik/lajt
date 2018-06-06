@@ -173,7 +173,7 @@
                                     :mutate ::mutation-expr})
            (conform ::l-query query))))
 
-(defn- query->parsed-query
+(defn query->parsed-query
   ([query]
    (query->parsed-query {} query))
   ([env query]
@@ -358,7 +358,7 @@
 
 ;; TODO: The parsed-query should probably be an ast instead
 ;; of a vector with stuff.
-(defn- parsed-query->query
+(defn parsed-query->query
   [parsed-query]
   (let [params-atom (atom nil)
         xf (map (fn [{::keys [type key query params recursion query-params]}]

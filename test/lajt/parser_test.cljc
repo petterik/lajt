@@ -197,13 +197,13 @@
   (prop/for-all [query (s/gen ::parser/query)]
     (= query
        (->> query
-            (#'parser/query->parsed-query)
-            (#'parser/parsed-query->query)))))
+            (parser/query->parsed-query)
+            (parser/parsed-query->query)))))
 
 (deftest query->parsed-query-roundtrips
   (are [query] (= query (->> query
-                             (#'parser/query->parsed-query)
-                             (#'parser/parsed-query->query)))
+                             (parser/query->parsed-query)
+                             (parser/parsed-query->query)))
     '[{:A 0}]
     '[(A)]
     '([:read] {:param 1})))
