@@ -229,6 +229,39 @@
         (nil? params)
         (= m params)))))
 
+(defn- remote-parse [query]
+  (let [remote-true (fn [env k p]
+                      (when (:target env) true))]
+    (*parser* (assoc *env* :read remote-true
+                           :mutate remote-true)
+              query
+              :remote)))
+
+(defn- mutates-before-reads [query]
+  (let [[query params] (parser/separate-query-from-params query)]
+    (cond-> (vec
+              (concat
+                (parser/update-query
+                  (filter (comp symbol? ::parser/key))
+                  query)
+                (parser/update-query
+                  (filter (comp keyword? ::parser/key))
+                  query)))
+            (some? params)
+            (list params))))
+
+(deftest returning-remote-queries-examples
+  (are [query] (= (mutates-before-reads query)
+                  (remote-parse query))
+    '[:A (A {})]
+    '([:A (A {})] {})))
+
+(defspec returning-remote-queries
+  50
+  (prop/for-all [query (s/gen ::parser/query)]
+    (= (mutates-before-reads query)
+       (remote-parse query))))
+
 (defspec query-into-test
   30
   (prop/for-all [query-keys (s/gen (s/coll-of keyword? :kind vector?))

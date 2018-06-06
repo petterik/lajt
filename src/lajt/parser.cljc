@@ -333,14 +333,15 @@
                                            ::params params)
                             ret ((get call-fns type) env key params)]
                         (handle-read-mutate-return env key params ret))))
+            query-params (some ::query-params query)
             query (sort-by (comp {:mutate 0 :read 1} ::type) query)]
         (if (nil? (:target env))
           (->> query
                (into {} (comp xf (remove (comp nil? second))))
                (not-empty))
-          (->> query
-               (into []
-                     (comp xf cat))))))))
+          (cond-> (into [] (comp xf cat) query)
+                  (some? query-params)
+                  (list query-params)))))))
 
 (def eager-query-parser-plugin
   (fn [env query]
