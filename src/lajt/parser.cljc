@@ -402,18 +402,20 @@
                             x)))))
            (parsed-query->query)))))
 
-(defn get-query-params [query]
-  (when (s/valid? ::l-query-param-expr query)
-    (second query)))
-
 (defn query-into [to xf query]
   (into to xf (query->parsed-query query)))
 
-(defn update-query-params [query f & args]
+(defn separate-query-from-params [query]
   (if (s/valid? ::l-query-param-expr query)
-    (let [[query params] query]
-      (list query (f params args)))
-    query))
+    [(first query) (second query)]
+    [query nil]))
+
+(defn update-query-params [query f & args]
+  (if (empty? query)
+    query
+    (let [[query params] (separate-query-from-params query)]
+      (list query (apply f params args)))))
+
 
 ;;;;;;;;;;;;;;;;;;;;;;
 ;; Merging queries

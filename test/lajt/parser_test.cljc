@@ -222,11 +222,12 @@
   30
   (prop/for-all [query (s/gen ::parser/query)
                  m (s/gen map?)]
-    (let [params (parser/get-query-params
-                    (parser/update-query-params query (constantly m)))]
-      (if (s/valid? ::parser/query-param-expr query)
-        (= m params)
-        (nil? params)))))
+    (let [[_ params] (-> query
+                         (parser/update-query-params (constantly m))
+                         (parser/separate-query-from-params))]
+      (if (empty? query)
+        (nil? params)
+        (= m params)))))
 
 (defspec query-into-test
   30
