@@ -30,8 +30,8 @@
                 :sha     "bb2c5a2c78aca9328e023b029c06ba0efdd1e3b7"}}
    :main-opts ["-m" "mach.pack.alpha.jcl"
                "deps.edn"
-               "target/lajt-0.1.1-SNAPSHOT-standalone.jar"
+               "target/lajt-0.1.2-SNAPSHOT-standalone.jar"
                "--application-id" "org.clojars.petterik/lajt"
-               "--application-version" "0.1.1-SNAPSHOT"
+               "--application-version" "0.1.2-SNAPSHOT"
                ]}}}
 

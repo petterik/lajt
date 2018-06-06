@@ -1,4 +1,4 @@
-(defproject org.clojars.petterik/lajt "0.1.1-SNAPSHOT"
+(defproject org.clojars.petterik/lajt "0.1.2-SNAPSHOT"
   :repositories [["clojars" {:sign-relases false}]]
   :dependencies 
   [[org.clojure/clojure "1.10.0-alpha4" :scope "provided"]
