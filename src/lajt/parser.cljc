@@ -4,11 +4,6 @@
     [clojure.spec.gen.alpha :as gen]
     [medley.core :as m]))
 
-(defn ?spec-throw [spec x]
-  (when-not (s/valid? spec x)
-    (throw (ex-info (str "Spec failed:\n" (s/explain-str spec x))
-                    (s/explain-data spec x)))))
-
 ;; TODO: Support idents?
 (s/def ::id keyword?)
 (s/def ::read-exprs (s/coll-of ::read-expr :kind vector? :gen-max 2))
@@ -39,7 +34,17 @@
 (s/def ::query-expr (s/or :read ::read-expr
                           :mutate ::mutation-expr))
 
-(s/def ::query (s/nilable (s/coll-of ::query-expr :kind vector? :gen-max 3)))
+(s/def ::query-exprs (s/coll-of ::query-expr :kind vector?
+                                :min-count 1
+                                :gen-max 3))
+(s/def ::query-param-expr (s/cat :query ::query-exprs
+                                 :params map?))
+
+(s/def ::empty-query (s/nilable (s/and empty? sequential?)))
+
+(s/def ::query (s/or :with-params ::query-param-expr
+                     :without-params ::query-exprs
+                     :empty-query ::empty-query))
 
 
 ;; Lazy version of the spec used for parsing/editing/merging.
@@ -50,8 +55,15 @@
 ;; the spec for validation, but we need laziness sometimes for speed.
 
 ;; l short for lazy.
-(s/def ::l-query (s/nilable
-                   (s/coll-of ::l-query-expr :kind vector? :gen-max 3)))
+(s/def ::l-query (s/or :with-params ::l-query-param-expr
+                       :without-params ::l-query-exprs
+                       :empty-query ::empty-query))
+
+(s/def ::l-query-param-expr (s/cat :query ::l-query-exprs
+                                   :params map?))
+(s/def ::l-query-exprs (s/coll-of ::l-query-expr :kind vector?
+                                  :min-count 1
+                                  :gen-max 3))
 (s/def ::l-query-expr (s/or :read ::l-read-expr
                             :mutate ::mutation-expr))
 (s/def ::l-read-expr (s/or
@@ -75,13 +87,14 @@
 ;; End lazy query spec.
 
 (defn- query-fragment [env k expr]
-  {::type      (::type env)
-   ::key       k
-   ::params    (:params env)
-   ::query     (:query env)
-   ::recursion (:recursion env)
-   ::expr      expr
-   ::expr-spec (get-in env [::expr-specs (::type env)])})
+  {::type         (::type env)
+   ::key          k
+   ::params       (:params env)
+   ::query        (:query env)
+   ::query-params (:query-params env)
+   ::recursion    (:recursion env)
+   ::expr         expr
+   ::expr-spec    (get-in env [::expr-specs (::type env)])})
 
 (defmulti parse (fn [env expr] (first expr)))
 (defmethod parse :default
@@ -133,20 +146,34 @@
   [env [_ expr]]
   )
 
-(defn lazy-query-parser-plugin
-  ([env]
-    (comp
-      (map (partial s/conform ::l-query-expr))
-      (map (partial parse (assoc env ::expr-specs
-                                     {:read   ::l-read-expr
-                                      :mutate ::mutation-expr})))))
-  ([env query]
-   (?spec-throw ::l-query query)
-   (into [] (lazy-query-parser-plugin env) query)))
+(defmethod parse :without-params
+  [env [_ query]]
+  (into [] (map (partial parse env)) query))
 
-(defn query->parsed-query
-  ([]
-    (lazy-query-parser-plugin {}))
+(defmethod parse :with-params
+  [env [_ {:keys [query params]}]]
+  (into []
+        (map (partial parse (assoc env :query-params params)))
+        query))
+
+(defmethod parse :empty-query [env _])
+
+(defn- conform [spec x]
+  (let [conformed (s/conform spec x)]
+    (if (= ::s/invalid conformed)
+      (throw (ex-info (str "Spec failed:\n" (s/explain-str spec x))
+                      (s/explain-data spec x)))
+      conformed)))
+
+(defn lazy-query-parser-plugin
+  [env query]
+  (if (empty? query)
+    query
+    (parse (assoc env ::expr-specs {:read   ::l-read-expr
+                                    :mutate ::mutation-expr})
+           (conform ::l-query query))))
+
+(defn- query->parsed-query
   ([query]
    (query->parsed-query {} query))
   ([env query]
@@ -201,6 +228,7 @@
       (s/gen ::query))))
 
 (comment
+  (gen/sample (s/gen (s/nilable (s/and empty? sequential?))))
   (gen/sample (s/gen ::query))
   (def queries *1)
   (def queries (filter seq queries))
@@ -295,8 +323,10 @@
                   :mutate (with-plugins-fn mutate ::mutate-plugins)}]
     (fn [env query]
       (let [xf (map (fn [{::keys [type expr expr-spec
-                                  params key query recursion]}]
-                      (let [env (assoc env ::expr expr
+                                  params key query recursion
+                                  query-params]}]
+                      (let [env (merge-with merge env query-params)
+                            env (assoc env ::expr expr
                                            ::expr-spec expr-spec
                                            :query (or query recursion)
                                            ::type type
@@ -314,37 +344,79 @@
 
 (def eager-query-parser-plugin
   (fn [env query]
-    (->> (s/conform ::query query)
-         (eduction
-           (map (partial parse (assoc env ::expr-specs {:read   ::read-expr
-                                                        :mutate ::mutation-expr})))
-           (map (fn [{::keys [query expr] :as fragment}]
-                  (cond-> fragment
-                          (some? query)
-                          (cond->
-                            (= :join (first expr))
-                            (update ::query #(s/unform ::read-exprs %))
-                            (= :union (first expr))
-                            (update ::query #(s/unform ::union-map %))))))))))
+    (->> (conform ::query query)
+         (parse (assoc env ::expr-specs {:read   ::read-expr
+                                         :mutate ::mutation-expr}))
+         (map (fn [{::keys [query expr] :as fragment}]
+                (cond-> fragment
+                        (some? query)
+                        (cond->
+                          (= :join (first expr))
+                          (update ::query #(s/unform ::read-exprs %))
+                          (= :union (first expr))
+                          (update ::query #(s/unform ::union-map %)))))))))
 
-(defn parsed-query->query
-  ([]
-   (map (fn [{::keys [type key query params recursion]}]
-          (condp = type
-            :read
-            (cond-> key
-                    (some? query)
-                    (hash-map query)
-                    (some? recursion)
-                    (hash-map recursion)
-                    (some? params)
-                    (list params))
-            :mutate
-            (if (some? params)
-              (list key params)
-              (list key))))))
-  ([parsed-query]
-   (into [] (parsed-query->query) parsed-query)))
+;; TODO: The parsed-query should probably be an ast instead
+;; of a vector with stuff.
+(defn- parsed-query->query
+  [parsed-query]
+  (let [params-atom (atom nil)
+        xf (map (fn [{::keys [type key query params recursion query-params]}]
+                  (reset! params-atom query-params)
+                  (condp = type
+                    :read
+                    (cond-> key
+                            (some? query)
+                            (hash-map query)
+                            (some? recursion)
+                            (hash-map recursion)
+                            (some? params)
+                            (list params))
+                    :mutate
+                    (if (some? params)
+                      (list key params)
+                      (list key)))))]
+    (if (empty? parsed-query)
+      parsed-query
+      (cond-> (into [] xf parsed-query)
+              @params-atom
+              (list @params-atom)))))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Query modification api
+
+(defn update-query [xf query]
+  (let [params-atom (atom nil)]
+    (if (empty? query)
+      query
+      (->> query
+           (query->parsed-query)
+           (eduction
+             (comp (map (fn [x]
+                          (reset! params-atom (::query-params x))
+                          (dissoc x ::query-params)))
+                   xf
+                   (map (fn [x]
+                          (if-let [qp @params-atom]
+                            (assoc x ::query-params qp)
+                            x)))))
+           (parsed-query->query)))))
+
+(defn get-query-params [query]
+  (when (s/valid? ::l-query-param-expr query)
+    (second query)))
+
+(defn query-into [to xf query]
+  (into to xf (query->parsed-query query)))
+
+(defn update-query-params [query f & args]
+  (if (s/valid? ::l-query-param-expr query)
+    (let [[query params] query]
+      (list query (f params args)))
+    query))
+
+;;;;;;;;;;;;;;;;;;;;;;
+;; Merging queries
 
 (declare merge-read-queries)
 (defn merge-queries [query & queries]
@@ -557,9 +629,8 @@
           (->> parsed-query
                (eduction
                  (filter (comp #{:read} ::type))
-                 (flatten-query-xf env flatten-query-opts)
-                 (parsed-query->query))
-               (vec)
+                 (flatten-query-xf env flatten-query-opts))
+               (parsed-query->query)
                (merge-read-queries)
                ((::query->parsed-query env) env)))))
 

@@ -194,18 +194,50 @@
 
 (defspec parsed-query-roundtrip
   50
-  (prop/for-all [query (gen/fmap vec (s/gen ::parser/query))]
+  (prop/for-all [query (s/gen ::parser/query)]
     (= query
        (->> query
-            (parser/query->parsed-query)
-            (parser/parsed-query->query)))))
+            (#'parser/query->parsed-query)
+            (#'parser/parsed-query->query)))))
 
 (deftest query->parsed-query-roundtrips
   (are [query] (= query (->> query
-                             (parser/query->parsed-query)
-                             (parser/parsed-query->query)))
+                             (#'parser/query->parsed-query)
+                             (#'parser/parsed-query->query)))
     '[{:A 0}]
-    '[(A)]))
+    '[(A)]
+    '([:read] {:param 1})))
+
+(deftest query-params-are-passed-to-env-test
+  (is (= (*parser* (assoc *env* :read (fn [env k p] (:query-params env)))
+                 '([:read-key] {:query-params ::param-value}))
+         {:read-key ::param-value})))
+
+(defspec update-query-roundtrip
+  30
+  (prop/for-all [query (s/gen ::parser/query)]
+    (= query (parser/update-query (map identity) query))))
+
+(defspec update-query-params-roundtrip
+  30
+  (prop/for-all [query (s/gen ::parser/query)
+                 m (s/gen map?)]
+    (let [params (parser/get-query-params
+                    (parser/update-query-params query (constantly m)))]
+      (if (s/valid? ::parser/query-param-expr query)
+        (= m params)
+        (nil? params)))))
+
+(defspec query-into-test
+  30
+  (prop/for-all [query-keys (s/gen (s/coll-of keyword? :kind vector?))
+                 params (s/gen (s/nilable map?))]
+    (let [query (cond-> query-keys
+                        (and (seq query-keys) params)
+                        (list params))]
+      (and (s/valid? ::parser/query query)
+        (= (parser/query-into #{} (map ::parser/key) query)
+           (set query-keys))))))
 
 (comment
   (def ^:dynamic *parser* (->parser parser/parser))
